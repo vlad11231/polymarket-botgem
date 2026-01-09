@@ -200,22 +200,30 @@ def index():
 # ==========================================
 
 def tg(msg):
-    # HARDCODED - Verifică de 3 ori că sunt corecte!
-    MY_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
-    MY_ID = "6854863928"
+    # --- DEBUGGING MODE ---
+    print(f"📢 TENTATIVĂ TRIMITERE MESAJ: {msg[:20]}...")
     
-    url = f"https://api.telegram.org/bot{MY_TOKEN}/sendMessage"
+    # 1. Verificăm dacă cheile există
+    if not BOT_TOKEN or "SECRET" in BOT_TOKEN:
+        print("❌ EROARE CRITICĂ: Bot Token-ul nu este citit corect (apare ca SECRET sau lipsește)!")
+        return
     
+    if not CHAT_ID or "SECRET" in str(CHAT_ID):
+        print("❌ EROARE CRITICĂ: Chat ID-ul lipsește!")
+        return
+
+    # 2. Încercăm trimiterea și afișăm RĂSPUNSUL EXACT de la Telegram
     try:
-        print(f"⏳ Încerc să trimit mesaj la: {MY_ID}...")
-        r = requests.post(url, json={"chat_id": MY_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
         
-        # AICI E CHEIA: Printăm răspunsul serverului Telegram
-        print(f"👉 STATUS COD: {r.status_code}") 
-        print(f"👉 RĂSPUNS TELEGRAM: {r.text}")
-        
+        if r.status_code == 200:
+            print("✅ Mesaj trimis cu succes!")
+        else:
+            print(f"⚠️ REFUZ TELEGRAM ({r.status_code}): {r.text}")
+            
     except Exception as e:
-        print(f"❌ EROARE CRITICĂ DE CONEXIUNE: {e}")
+        print(f"❌ EROARE DE CONEXIUNE: {e}")
 
 def fetch(addr):
     try:
