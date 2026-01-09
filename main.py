@@ -9,11 +9,19 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE & SECRETE
+# 1. CONFIGURARE (HARDCODED - VARIANTA SIGURĂ)
 # ==========================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "SECRET_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID", "SECRET_CHAT_ID")
+
+# 🔴 STERGE CE ERA INAINTE SI PUNE ASTA:
+# Pune token-ul tau exact intre ghilimele, fara spatii
+BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
+
+# Pune ID-ul tau aici (tot intre ghilimele ca sa fim siguri)
+CHAT_ID = "6854863928"
+
 PORT = int(os.getenv("PORT", 5000))
+
+# ... restul codului ramane la fel ...
 
 API = "https://data-api.polymarket.com/activity"
 POLL = 60  # Verifică la fiecare 60 secunde
