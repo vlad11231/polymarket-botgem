@@ -292,8 +292,13 @@ def bot_loop():
     load()
     print("Bot loop started.")
     
+    # ADAGA LINIA ASTA:
+    tg("✅ TEST: Sunt aici! Botul a pornit cu succes.") 
+    
     while True:
         try:
+            # ... restul codului ...
+
             check_nightly_summary()
             
             for name, addr in {**TRADERS, SELF: SELF_ADDR}.items():
