@@ -200,11 +200,22 @@ def index():
 # ==========================================
 
 def tg(msg):
-    if not BOT_TOKEN or "SECRET" in BOT_TOKEN: return
+    # HARDCODED - Verifică de 3 ori că sunt corecte!
+    MY_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
+    MY_ID = "6854863928"
+    
+    url = f"https://api.telegram.org/bot{MY_TOKEN}/sendMessage"
+    
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                      json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=5)
-    except: pass
+        print(f"⏳ Încerc să trimit mesaj la: {MY_ID}...")
+        r = requests.post(url, json={"chat_id": MY_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+        
+        # AICI E CHEIA: Printăm răspunsul serverului Telegram
+        print(f"👉 STATUS COD: {r.status_code}") 
+        print(f"👉 RĂSPUNS TELEGRAM: {r.text}")
+        
+    except Exception as e:
+        print(f"❌ EROARE CRITICĂ DE CONEXIUNE: {e}")
 
 def fetch(addr):
     try:
