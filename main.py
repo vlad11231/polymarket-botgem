@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE STABILA
+# 1. CONFIGURARE "MULTI-AI"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -66,17 +66,15 @@ global_state = {
     "last_buy_times": {}, 
     "cluster_participants": {}, 
     "cluster_created_at": {}, 
-    "clusters_sent": {},  # <--- FIX: Aceasta cheie lipsea si cauza eroarea
+    "clusters_sent": {},
     "last_summary_day": "",
     "nightly_stats": {"new_clusters": 0, "big_exits": 0},
     "last_update": "Never"
 }
 
-# Cache simplu pentru preturi ca sa nu luam rate-limit
 price_cache = {} 
 
 def sanitize_state():
-    """Asigura ca toate cheile necesare exista in state"""
     defaults = {
         "clusters_sent": {},
         "cluster_created_at": {},
@@ -95,11 +93,10 @@ def load():
     if STATE_FILE.exists():
         try:
             saved = json.loads(STATE_FILE.read_text())
-            # Pastram timpul de start curent
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
             global_state["bot_start_time"] = current_start
-            sanitize_state() # <--- REPARA EROAREA DE LOOP
+            sanitize_state()
         except: 
             sanitize_state()
 
@@ -117,7 +114,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Stable</title>
+    <title>PolyBot Multi-Opp</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -142,7 +139,7 @@ HTML_TEMPLATE = """
         .rec-swap { border-color: #fdcb6e; }
         .rec-sell { border-color: #d63031; }
         .rec-buy  { border-color: #00b894; }
-        .rec-ok   { border-color: #0984e3; }
+        .rec-ok   { border-color: #00d2ff; }
         .rec-text { font-size: 1.1em; font-weight: 500; }
         .rec-sub  { font-size: 0.9em; color: #aaa; }
     </style>
@@ -164,8 +161,8 @@ HTML_TEMPLATE = """
             {% endfor %}
         {% else %}
             <div class="rec-box rec-ok">
-                <div class="rec-text">✅ Portofoliu Echilibrat</div>
-                <div class="rec-sub">Nu sunt necesare acțiuni urgente.</div>
+                <div class="rec-text">✅ Portofoliu Stabil</div>
+                <div class="rec-sub">Nu sunt necesare vânzări urgente. Aștept oportunități noi...</div>
             </div>
         {% endif %}
     </div>
@@ -173,7 +170,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💼 Portofoliul Tău ({{ self_name }})</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare ($)</th><th>Preț</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare Reală ($)</th><th>Preț Curent</th></tr></thead>
             <tbody>
                 {% for pos in state.my_portfolio %}
                 <tr class="self-row">
@@ -184,14 +181,14 @@ HTML_TEMPLATE = """
                     <td>{{ pos.display_price }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele...</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele din piață...</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 
     <div class="card">
-        <h3>🔥 Active New Clusters (Detectate acum > ${{ mini }})</h3>
+        <h3>🔥 Active New Clusters (Apărute ACUM > ${{ mini }})</h3>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Traderi & Investiții</th><th>Total ($)</th><th>Preț</th><th>Scor</th></tr></thead>
             <tbody>
@@ -217,7 +214,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💰 Top Investiții Comune (All Time - Total Deținut)</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț Curent</th></tr></thead>
             <tbody>
                 {% for c in all_shared %}
                 <tr>
@@ -275,11 +272,13 @@ def index():
                 participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
 
+    # 1. AI RECS
     recs = []
     my_weakest_score = 10.0
     my_weakest_market = None
     my_owned_markets = []
 
+    # -- Analiza Portofoliu --
     for pos in global_state["my_portfolio"]:
         m_key = f"{pos['title']}|{pos['outcome']}"
         my_owned_markets.append(m_key)
@@ -297,9 +296,11 @@ def index():
                 my_weakest_score = current_score
                 my_weakest_market = pos['title']
 
+    # -- Analiza Oportunitati (Multiple) --
     best_opp_score = 0
     best_opp_key = None
-    
+    potential_buys = []
+
     smart_clusters = []   
     all_shared = []       
 
@@ -312,7 +313,6 @@ def index():
     for key in unique_markets:
         vol, users, parts = get_cluster_data_raw(key)
         
-        # Scor Live
         p_live = global_state['market_prices'].get(key, 0.5)
         created_at = global_state["cluster_created_at"].get(key, 0)
         score = calc_score(vol, len(users), p_live, False, created_at)
@@ -338,7 +338,6 @@ def index():
 
             all_shared.append(cluster_obj)
 
-            # Doar ce e nou de cand a pornit botul
             is_new = False
             if created_at > global_state["bot_start_time"]:
                 is_new = True
@@ -346,16 +345,29 @@ def index():
             if vol >= MINI and is_new:
                 smart_clusters.append(cluster_obj)
             
-            if key not in my_owned_markets and score > best_opp_score and vol >= MINI:
-                best_opp_score = score
-                best_opp_key = key
+            # Colectam potentiale cumparari (Top 3)
+            if key not in my_owned_markets and score >= 8.0 and vol >= MINI:
+                potential_buys.append((key, score))
+                # Pastram si cel mai bun pt swap logic
+                if score > best_opp_score:
+                    best_opp_score = score
+                    best_opp_key = key
 
     smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
     all_shared.sort(key=lambda x: x["vol"], reverse=True)
 
-    if best_opp_key and best_opp_score >= 8.0:
-        recs.append({"class": "rec-buy", "text": f"🚀 <b>OPORTUNITATE: {best_opp_key.split('|')[0]}</b>", "reason": f"Scor {best_opp_score:.1f}. Cluster puternic & nou."})
+    # -- RECOMANDARI MULTIPLE --
+    # Sortam descrescator dupa scor si luam top 3
+    potential_buys.sort(key=lambda x: x[1], reverse=True)
     
+    for opp_key, opp_score in potential_buys[:3]:
+        recs.append({
+            "class": "rec-buy", 
+            "text": f"🚀 <b>OPORTUNITATE: {opp_key.split('|')[0]}</b>", 
+            "reason": f"Scor {opp_score:.1f}. Cluster puternic."
+        })
+    
+    # SWAP Logic (doar cu cel mai bun)
     if my_weakest_market and best_opp_key:
         if my_weakest_score < 5.0 and best_opp_score > 7.5:
             recs.append({"class": "rec-swap", "text": f"🔄 <b>SWAP: {my_weakest_market} ➔ {best_opp_key.split('|')[0]}</b>", "reason": "Upgrade Scor (AI Optimization)."})
@@ -388,15 +400,11 @@ def safe_float(v):
     try: return float(v)
     except: return 0.0
 
-# --- CACHED PRICE FETCHER ---
 def get_real_price(token_id):
     if not token_id: return 0
-    
-    # Check Cache
     if token_id in price_cache:
         ts, price = price_cache[token_id]
-        if time.time() - ts < 60: # Cache valabil 60s
-            return price
+        if time.time() - ts < 60: return price
             
     try:
         r = requests.get(API_CLOB, params={"token_id": token_id, "side": "buy"}, timeout=2)
@@ -424,9 +432,7 @@ def sync_trader_positions():
                     outcome = item.get("outcome", "YES").upper()
                     
                     p = safe_float(item.get("price"))
-                    # Daca API positions da 0, intrebam CLOB
                     if p == 0: p = get_real_price(item.get("asset"))
-                    # Fallback
                     if p == 0: p = safe_float(item.get("avgBuyPrice"))
                     
                     val = size * p
@@ -519,7 +525,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Error Loop (State Sanitizer)\nFix: $0 Price (Cache)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFeatures: Multi-Opp AI & Fixed Status") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -645,12 +651,17 @@ def bot_loop():
                             c_users_set.add(sub_k.split("|")[0])
                     
                     if len(c_users_set) >= 2 and c_total >= MINI:
+                        # KEY FIX: Daca suntem in primul loop, setam 'created_at' la 0 (Istoric)
                         if c_key not in global_state["cluster_created_at"]:
-                            global_state["cluster_created_at"][c_key] = time.time()
+                            if loop_count == 1:
+                                global_state["cluster_created_at"][c_key] = 0 # Marcam ca VECHI
+                                global_state["clusters_sent"][c_key] = c_total # Marcam ca trimis (Silent)
+                            else:
+                                global_state["cluster_created_at"][c_key] = time.time() # Marcam ca NOU
 
                         known_users = set(global_state["cluster_participants"].get(c_key, []))
                         new_users = c_users_set - known_users
-                        if new_users and len(known_users) > 0:
+                        if new_users and len(known_users) > 0 and loop_count > 1: # Doar dupa start
                             new_guy = list(new_users)[0]
                             c_side = c_key.split("|")[1]
                             c_emoji = "🟢" if "YES" in c_side else "🔴"
@@ -658,9 +669,10 @@ def bot_loop():
 
                         global_state["cluster_participants"][c_key] = list(c_users_set)
 
-                        if "clusters_sent" not in global_state: global_state["clusters_sent"] = {}
                         last_sent = global_state["clusters_sent"].get(c_key, 0)
-                        if c_total > last_sent * 1.2:
+                        
+                        # ALERTE DE CLUSTER DOAR DUPA LOOP 1 (SILENT START)
+                        if loop_count > 1 and c_total > last_sent * 1.2:
                             created_ts = global_state["cluster_created_at"][c_key]
                             sc = calc_score(c_total, len(c_users_set), global_state["market_prices"].get(c_key, 0.5), False, created_ts)
                             c_side = c_key.split("|")[1]
