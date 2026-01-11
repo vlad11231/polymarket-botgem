@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "TITANIUM v3"
+# 1. CONFIGURARE "FINAL DUAL DASHBOARD"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -22,10 +22,13 @@ API_POSITIONS = "https://data-api.polymarket.com/positions"
 
 POLL = 60  # Verifică la fiecare 60 secunde
 
-# --- LIMITE ---
+# --- LIMITE ALERTE ---
 MIN_BUY_ALERT = 800    
 MIN_SELL_ALERT = 1000  
-MIN_DASHBOARD_LOG = 250    
+WHALE_ALERT = 5000      
+MIN_DASHBOARD_LOG = 500 
+
+# --- LIMITE CLUSTERE (PENTRU ALERTE SI TABELUL SMART) ---
 MINI = 6000      
 NORMAL = 10000
 BIG = 20000
@@ -81,7 +84,7 @@ def save():
     STATE_FILE.write_text(json.dumps(global_state, indent=2))
 
 # ==========================================
-# 3. DASHBOARD WEB (CU RECOMANDARI AI)
+# 3. DASHBOARD WEB (DUAL SECTION)
 # ==========================================
 app = Flask(__name__)
 
@@ -89,7 +92,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Titanium v3</title>
+    <title>PolyBot Final</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -110,11 +113,10 @@ HTML_TEMPLATE = """
         .self-row { background: rgba(0, 210, 255, 0.1); }
         .details { font-size: 0.85em; color: #aaa; }
         
-        /* Stiluri noi pentru Recomandari */
         .rec-box { border-left: 4px solid; padding-left: 10px; margin-bottom: 10px; background: rgba(0,0,0,0.2); padding: 8px; }
-        .rec-swap { border-color: #fdcb6e; } /* Galben */
-        .rec-sell { border-color: #d63031; } /* Rosu */
-        .rec-buy  { border-color: #00b894; } /* Verde */
+        .rec-swap { border-color: #fdcb6e; }
+        .rec-sell { border-color: #d63031; }
+        .rec-buy  { border-color: #00b894; }
         .rec-text { font-size: 1.1em; font-weight: 500; }
         .rec-sub  { font-size: 0.9em; color: #aaa; }
     </style>
@@ -126,7 +128,7 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card" style="border: 1px solid #00d2ff;">
-        <h3 style="margin-top:0;">🧠 Analiză Strategică & Recomandări</h3>
+        <h3 style="margin-top:0;">🧠 Analiză Strategică (AI)</h3>
         {% if recommendations %}
             {% for rec in recommendations %}
             <div class="rec-box {{ rec.class }}">
@@ -135,14 +137,14 @@ HTML_TEMPLATE = """
             </div>
             {% endfor %}
         {% else %}
-            <div style="color:#888; font-style:italic;">✅ Portofoliul tău este echilibrat. Nicio acțiune critică detectată.</div>
+            <div style="color:#888; font-style:italic;">✅ Nicio acțiune critică necesară.</div>
         {% endif %}
     </div>
 
     <div class="card">
-        <h3>💼 Portofoliul Tău REAL ({{ self_name }})</h3>
+        <h3>💼 Portofoliul Tău ({{ self_name }})</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare ($)</th><th>Preț</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare ($)</th><th>Preț Intrare/Curent</th></tr></thead>
             <tbody>
                 {% for pos in state.my_portfolio %}
                 <tr class="self-row">
@@ -150,7 +152,7 @@ HTML_TEMPLATE = """
                     <td><span class="{{ 'yes' if 'YES' in pos.outcome else 'no' }}">{{ pos.outcome }}</span></td>
                     <td>{{ pos.size }}</td>
                     <td><b>${{ pos.value }}</b></td>
-                    <td>{{ pos.price }}¢</td>
+                    <td>{{ pos.display_price }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele...</td></tr>
@@ -160,11 +162,11 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card">
-        <h3>🔥 Active Clusters (Top {{ max_clusters }})</h3>
+        <h3>🔥 Active New Clusters (> ${{ mini }})</h3>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Traderi & Investiții</th><th>Total ($)</th><th>Preț</th><th>Scor</th></tr></thead>
             <tbody>
-                {% for c in display_clusters %}
+                {% for c in smart_clusters %}
                 <tr>
                     <td>{{ c.key.split('|')[0] }}</td>
                     <td><span class="{{ 'yes' if 'YES' in c.key else 'no' }}">{{ c.key.split('|')[1] }}</span></td>
@@ -177,7 +179,30 @@ HTML_TEMPLATE = """
                     <td>{{ c.score_html|safe }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster activ peste ${{ mini }}</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster nou peste ${{ mini }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>💰 Top Investiții Comune (Total Deținut)</h3>
+        <table>
+            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț</th></tr></thead>
+            <tbody>
+                {% for c in all_shared %}
+                <tr>
+                    <td>{{ c.key.split('|')[0] }}</td>
+                    <td><span class="{{ 'yes' if 'YES' in c.key else 'no' }}">{{ c.key.split('|')[1] }}</span></td>
+                    <td>
+                        👥 {{ c.count }}<br>
+                        <span class="details">{{ c.breakdown }}</span>
+                    </td>
+                    <td><b>${{ c.vol_fmt }}</b></td>
+                    <td>{{ c.price }}¢</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" style="text-align:center; color:#666;">Nu există poziții comune momentan.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -210,7 +235,6 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    # Helper
     def get_cluster_data_raw(key):
         total = 0
         participants = []
@@ -221,10 +245,8 @@ def index():
                 participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
 
-    # --- 1. GENERARE RECOMANDARI AI ---
+    # --- 1. AI RECS ---
     recs = []
-    
-    # a. Analizam Portofoliul Tau
     my_weakest_score = 10.0
     my_weakest_market = None
     my_owned_markets = []
@@ -232,94 +254,81 @@ def index():
     for pos in global_state["my_portfolio"]:
         m_key = f"{pos['title']}|{pos['outcome']}"
         my_owned_markets.append(m_key)
-        
         current_price = float(pos['price']) / 100.0
         current_score = global_state["scores"].get(m_key, 5.0)
 
-        # Regula 1: Take Profit (Pret prea mare)
         if current_price >= 0.94:
-            recs.append({
-                "class": "rec-sell",
-                "text": f"💰 <b>VINDE: {pos['title']}</b> ({pos['outcome']})",
-                "reason": f"Prețul e {current_price*100:.0f}¢. Ești la vârf, profitul e maxim, riscul e mare."
-            })
-        
-        # Regula 2: Cut Loss (Scor mic)
+            recs.append({"class": "rec-sell", "text": f"💰 <b>VINDE: {pos['title']}</b>", "reason": f"Profit maxim ({current_price*100:.0f}¢)."})
         elif current_score < 3.0:
-            recs.append({
-                "class": "rec-sell",
-                "text": f"⚠️ <b>IEȘI DIN: {pos['title']}</b>",
-                "reason": f"Scor {current_score:.1f}/10. Balenele au vândut, nu mai are susținere."
-            })
-            # Candidat pentru SWAP
+            recs.append({"class": "rec-sell", "text": f"⚠️ <b>IEȘI DIN: {pos['title']}</b>", "reason": f"Scor AI {current_score:.1f}. Trend rupt."})
             if current_score < my_weakest_score:
                 my_weakest_score = current_score
                 my_weakest_market = pos['title']
 
-    # b. Analizam Oportunitati (Clustere unde NU esti)
     best_opp_score = 0
     best_opp_key = None
+    
+    # --- 2. CALCUL LISTE DASHBOARD ---
+    
+    smart_clusters = []   # Cele noi/mari (filtru > $6000)
+    all_shared = []       # Toate comune (filtru > 0$)
 
-    for key, score in global_state["scores"].items():
-        if key not in my_owned_markets and score > best_opp_score:
-            # Verificam sa fie cluster valid
-            vol, users, _ = get_cluster_data_raw(key)
-            if len(users) >= 2 and vol >= MINI:
-                best_opp_score = score
-                best_opp_key = key
-
-    # Regula 3: Oportunitate FOMO (Scor f. mare, > 8.5)
-    if best_opp_key and best_opp_score >= 8.5:
-        recs.append({
-            "class": "rec-buy",
-            "text": f"🚀 <b>INTRĂ PE: {best_opp_key.split('|')[0]}</b>",
-            "reason": f"Scor {best_opp_score:.1f}/10. Cluster puternic detectat unde tu nu ești."
-        })
-
-    # Regula 4: SWAP LOGIC (Daca ai ceva slab si exista ceva mult mai bun)
-    # Conditie: Slab < 4.5 SI Bun > 7.5 SI Diferenta > 3 puncte
-    if my_weakest_market and best_opp_key:
-        if my_weakest_score < 4.5 and best_opp_score > 7.5 and (best_opp_score - my_weakest_score) > 3.0:
-            recs.append({
-                "class": "rec-swap",
-                "text": f"🔄 <b>SWAP: Vinde '{my_weakest_market}' ➔ Cumpără '{best_opp_key.split('|')[0]}'</b>",
-                "reason": f"Renunță la poziția slabă (Scor {my_weakest_score:.1f}) pentru una de top (Scor {best_opp_score:.1f})."
-            })
-
-    # --- 2. LOGICA CLUSTERE DASHBOARD ---
-    all_clusters = []
     for key, score in global_state["scores"].items():
         vol, users, parts = get_cluster_data_raw(key)
-        if len(users) >= 2 and vol >= MINI:
+        
+        # Validare comuna: Min 2 traderi
+        if len(users) >= 2:
             sums = {}
             for name, val in parts: sums[name] = sums.get(name, 0) + val
             sorted_sums = sorted(sums.items(), key=lambda x: x[1], reverse=True)
             breakdown = ", ".join([f"{n}: ${v:,.0f}" for n, v in sorted_sums if v > 10])
 
+            price = f"{global_state['market_prices'].get(key, 0) * 100:.1f}"
+            
+            # Format Scor
             color = "score-low"
             if score >= 8: color = "score-high"
             elif score >= 6: color = "score-med"
             score_html = f'<span class="{color}">{score:.1f}/10</span>'
-
-            price = f"{global_state['market_prices'].get(key, 0) * 100:.1f}"
-            all_clusters.append({
+            
+            cluster_obj = {
                 "key": key, "vol": vol, "vol_fmt": f"{vol:,.0f}",
                 "count": len(users), "breakdown": breakdown,
                 "price": price, "score_html": score_html
-            })
+            }
 
-    all_clusters.sort(key=lambda x: x["vol"], reverse=True)
-    display_clusters = all_clusters[:MAX_DASHBOARD_CLUSTERS]
+            # LISTA 1: TOATE COMUNE (Pentru vedere de ansamblu "Deja Investite")
+            all_shared.append(cluster_obj)
+
+            # LISTA 2: SMART CLUSTERS (Pentru semnale "Noi/Mari" - Limita $6000)
+            if vol >= MINI:
+                smart_clusters.append(cluster_obj)
+                # Logic pt Rec AI
+                if key not in my_owned_markets and score > best_opp_score:
+                    best_opp_score = score
+                    best_opp_key = key
+
+    # Sortari
+    smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
+    all_shared.sort(key=lambda x: x["vol"], reverse=True) # Top Shared by Value
+
+    # AI SWAP
+    if best_opp_key and best_opp_score >= 8.5:
+        recs.append({"class": "rec-buy", "text": f"🚀 <b>INTRĂ PE: {best_opp_key.split('|')[0]}</b>", "reason": f"Scor {best_opp_score:.1f}. Cluster puternic."})
+    
+    if my_weakest_market and best_opp_key:
+        if my_weakest_score < 4.5 and best_opp_score > 7.5 and (best_opp_score - my_weakest_score) > 3.0:
+            recs.append({"class": "rec-swap", "text": f"🔄 <b>SWAP: {my_weakest_market} ➔ {best_opp_key.split('|')[0]}</b>", "reason": "Optimizare portofoliu."})
 
     return render_template_string(
         HTML_TEMPLATE, 
         state=global_state, 
         self_name=SELF, 
-        recommendations=recs, # Trimitem recomandarile in HTML
+        recommendations=recs, 
         min_dash=MIN_DASHBOARD_LOG,
         mini=MINI,
-        max_clusters=MAX_DASHBOARD_CLUSTERS,
-        display_clusters=display_clusters
+        smart_clusters=smart_clusters[:MAX_DASHBOARD_CLUSTERS], # Top 20 Smart
+        all_shared=all_shared[:20] # Top 20 Total
     )
 
 # ==========================================
@@ -335,6 +344,10 @@ def tg(msg):
     except Exception as e:
         print(f"❌ ERR: {e}")
 
+def safe_float(v):
+    try: return float(v)
+    except: return 0.0
+
 def sync_portfolio():
     print("♻️ Sincronizare Portofoliu...")
     try:
@@ -344,21 +357,30 @@ def sync_portfolio():
             real_portfolio = []
             
             for item in data:
-                size = float(item.get("size", 0))
+                size = safe_float(item.get("size"))
                 if size < 1: continue 
                 
                 title = item.get("title", "Unknown Market")
                 outcome = item.get("outcome", "YES").upper()
-                price = float(item.get("price", 0))
                 
-                if price == 0: price = float(item.get("avgBuyPrice", 0))
-                if price == 0: price = global_state["market_prices"].get(f"{title}|{outcome}", 0)
+                price_live = safe_float(item.get("price"))
+                price_entry = safe_float(item.get("avgBuyPrice"))
+                
+                calc_price = price_live if price_live > 0 else (price_entry if price_entry > 0 else 0)
+                if calc_price == 0:
+                    calc_price = global_state["market_prices"].get(f"{title}|{outcome}", 0)
 
-                value = size * price
+                value = size * calc_price
+                
+                if price_live > 0: display_price = f"{price_live*100:.1f}¢"
+                elif price_entry > 0: display_price = f"{price_entry*100:.1f}¢ (Intrare)"
+                else: display_price = "N/A"
+
                 real_portfolio.append({
                     "title": title, "outcome": outcome,
                     "size": f"{size:.0f}", "value": f"{value:.0f}",
-                    "price": f"{price*100:.1f}"
+                    "price": f"{calc_price*100:.1f}",
+                    "display_price": display_price
                 })
             
             global_state["my_portfolio"] = real_portfolio
@@ -378,24 +400,25 @@ def get_usd(e):
 
 def calc_score(cluster_val, participants_count, price, is_ping_pong, created_at):
     score = 5.0 
-    if cluster_val >= BIG: score += 3.5
+    
+    if cluster_val >= BIG: score += 4.0   
     elif cluster_val >= NORMAL: score += 2.5
     elif cluster_val >= MINI: score += 1.5
     
-    if participants_count >= 3: score += 1.5
-    elif participants_count == 2: score += 0.5
-    else: score -= 1.0 
-
+    if participants_count >= 3: score += 2.0
+    elif participants_count == 2: score += 1.0
+    
     if price < 0.50: score += 1.0     
     elif price < 0.85: score += 0.5   
-    elif price > 0.95: score -= 2.0   
+    elif price > 0.95: score -= 3.0   
 
     if created_at > 0:
         age_hours = (time.time() - created_at) / 3600
         if age_hours > 72: score -= 1.5 
         elif age_hours < 12: score += 0.5 
 
-    if is_ping_pong: score -= 4.0
+    if is_ping_pong: score -= 5.0 
+    
     return max(0.0, min(10.0, score))
 
 def check_nightly_summary():
@@ -415,7 +438,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM UPDATE</b>\nModul: AI Recommendations\nLogic: Swap & Profit Taking") 
+    tg("✅ <b>SYSTEM ONLINE: DUAL DASHBOARD</b>\n1. Active New Clusters (>6k)\n2. Total Shared Holdings (All)") 
     sync_portfolio()
     
     loop_count = 0
@@ -455,7 +478,7 @@ def bot_loop():
                     market_key = f"{title}|{side}"
                     global_state["market_prices"][market_key] = price
 
-                    # Cluster Data
+                    # Cluster Calc
                     cluster_participants = set()
                     cluster_sum = 0
                     for k, v in global_state["positions"].items():
@@ -465,7 +488,6 @@ def bot_loop():
                     
                     participants_count = len(cluster_participants)
                     
-                    # Ping Pong
                     is_ping_pong = False
                     if action == "sell":
                         last_buy = global_state["last_buy_times"].get(pos_key, 0)
@@ -474,8 +496,6 @@ def bot_loop():
                     if action == "buy" or action == "trade": global_state["last_buy_times"][pos_key] = ts
 
                     created_at = global_state["cluster_created_at"].get(market_key, 0)
-                    
-                    # Scor
                     current_score = calc_score(cluster_sum, participants_count, price, is_ping_pong, created_at)
                     global_state["scores"][market_key] = current_score
 
@@ -498,7 +518,8 @@ def bot_loop():
                         if action in ["buy", "trade"]:
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             if val >= MIN_BUY_ALERT:
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\n💲 {val:.0f} @ {price*100:.1f}¢\n🎯 Scor: <b>{current_score:.1f}/10</b>")
+                                whale_tag = " 🐋 <b>WHALE MOVE!</b>" if val >= WHALE_ALERT else ""
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 {val:.0f} @ {price*100:.1f}¢\n🎯 Scor: <b>{current_score:.1f}/10</b>")
 
                         elif action == "sell":
                             old = global_state["positions"].get(pos_key, 0)
@@ -507,7 +528,7 @@ def bot_loop():
                             if val >= MIN_SELL_ALERT:
                                 reason = "(Profit)" if price > 0.90 else "(Loss)"
                                 if cluster_sum + val >= MINI and participants_count >= 2:
-                                    pp_warn = "⚠️ <b>PING-PONG / WEAK HANDS</b>" if is_ping_pong else "📉 <b>CLUSTER SLĂBIT</b>"
+                                    pp_warn = "⚠️ <b>PING-PONG</b>" if is_ping_pong else "📉 <b>CLUSTER SLĂBIT</b>"
                                     tg(f"{pp_warn}\n👤 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f} {reason}")
                                 else:
                                     tg(f"📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f} {reason}")
@@ -516,6 +537,7 @@ def bot_loop():
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
+                        if val >= WHALE_ALERT: note += " | 🐋 Whale"
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
                             "trader": name, "action": action,
@@ -550,7 +572,7 @@ def bot_loop():
                             new_guy = list(new_users)[0]
                             c_side = c_key.split("|")[1]
                             c_emoji = "🟢" if "YES" in c_side else "🔴"
-                            tg(f"🚨 <b>TRADER NOU ÎN CLUSTER!</b>\n👤 <b>{new_guy}</b> a intrat pe {c_emoji} {c_side}\n🏆 {c_key.split('|')[0]}\n💰 Total Acum: ${c_total:,.0f}")
+                            tg(f"🚨 <b>TRADER NOU ÎN COMUN!</b>\n👤 <b>{new_guy}</b> a intrat pe {c_emoji} {c_side}\n🏆 {c_key.split('|')[0]}\n💰 Total Acum: ${c_total:,.0f}")
 
                         global_state["cluster_participants"][c_key] = list(c_users_set)
 
@@ -561,8 +583,8 @@ def bot_loop():
                             c_side = c_key.split("|")[1]
                             c_emoji = "🟢" if "YES" in c_side else "🔴"
                             level = "MINI"
-                            if c_total >= BIG: level = "MARE ($20k+)"
-                            elif c_total >= NORMAL: level = "MEDIU ($10k+)"
+                            if c_total >= BIG: level = "MARE"
+                            elif c_total >= NORMAL: level = "MEDIU"
                             
                             tg(f"📊 <b>CLUSTER {level} {c_emoji} {c_side}</b>\n🏆 {c_key.split('|')[0]}\n👥 {len(c_users_set)} Traderi\n💰 Total: ${c_total:,.0f}\n🎯 Scor: {sc:.1f}")
                             
