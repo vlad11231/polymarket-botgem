@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "PERFECTED LOGIC"
+# 1. CONFIGURARE STABILA
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -52,11 +52,11 @@ TRADERS = {
 }
 
 # ==========================================
-# 2. STATE MANAGEMENT
+# 2. STATE MANAGEMENT & CACHE
 # ==========================================
 global_state = {
     "initialized": False,
-    "bot_start_time": time.time(), # MARCAM MOMENTUL STARTULUI
+    "bot_start_time": time.time(),
     "last": {},           
     "positions": {},      
     "my_portfolio": [],   
@@ -66,10 +66,28 @@ global_state = {
     "last_buy_times": {}, 
     "cluster_participants": {}, 
     "cluster_created_at": {}, 
+    "clusters_sent": {},  # <--- FIX: Aceasta cheie lipsea si cauza eroarea
     "last_summary_day": "",
     "nightly_stats": {"new_clusters": 0, "big_exits": 0},
     "last_update": "Never"
 }
+
+# Cache simplu pentru preturi ca sa nu luam rate-limit
+price_cache = {} 
+
+def sanitize_state():
+    """Asigura ca toate cheile necesare exista in state"""
+    defaults = {
+        "clusters_sent": {},
+        "cluster_created_at": {},
+        "cluster_participants": {},
+        "scores": {},
+        "market_prices": {},
+        "positions": {}
+    }
+    for k, v in defaults.items():
+        if k not in global_state:
+            global_state[k] = v
 
 def load():
     global global_state
@@ -77,11 +95,13 @@ def load():
     if STATE_FILE.exists():
         try:
             saved = json.loads(STATE_FILE.read_text())
-            # Pastram bot_start_time curent, nu cel salvat, ca sa vedem doar ce e nou sesiunea asta
+            # Pastram timpul de start curent
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
-            global_state["bot_start_time"] = current_start 
-        except: pass
+            global_state["bot_start_time"] = current_start
+            sanitize_state() # <--- REPARA EROAREA DE LOOP
+        except: 
+            sanitize_state()
 
 def save():
     if len(global_state["trade_log"]) > 200:
@@ -97,7 +117,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Intelligence</title>
+    <title>PolyBot Stable</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -145,7 +165,7 @@ HTML_TEMPLATE = """
         {% else %}
             <div class="rec-box rec-ok">
                 <div class="rec-text">✅ Portofoliu Echilibrat</div>
-                <div class="rec-sub">Nu există acțiuni critice (Sell/Swap) momentan. Caut oportunități...</div>
+                <div class="rec-sub">Nu sunt necesare acțiuni urgente.</div>
             </div>
         {% endif %}
     </div>
@@ -153,7 +173,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💼 Portofoliul Tău ({{ self_name }})</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare Reală ($)</th><th>Preț Curent</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare ($)</th><th>Preț</th></tr></thead>
             <tbody>
                 {% for pos in state.my_portfolio %}
                 <tr class="self-row">
@@ -164,7 +184,7 @@ HTML_TEMPLATE = """
                     <td>{{ pos.display_price }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele din piață...</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele...</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -197,7 +217,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💰 Top Investiții Comune (All Time - Total Deținut)</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț Curent</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț</th></tr></thead>
             <tbody>
                 {% for c in all_shared %}
                 <tr>
@@ -255,7 +275,6 @@ def index():
                 participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
 
-    # 1. AI RECS (LOGICA DEBLOCATA)
     recs = []
     my_weakest_score = 10.0
     my_weakest_market = None
@@ -268,12 +287,11 @@ def index():
             p_val = float(pos['price'].replace('¢', '').split()[0]) / 100.0
         except: p_val = 0.0
         
-        # Scor default 5.0 daca lipseste
         current_score = global_state["scores"].get(m_key, 5.0)
 
         if p_val >= 0.94:
             recs.append({"class": "rec-sell", "text": f"💰 <b>VINDE: {pos['title']}</b>", "reason": f"Profit maxim ({p_val*100:.0f}¢)."})
-        elif current_score < 4.0: # Sensibilitate crescuta
+        elif current_score < 4.0:
             recs.append({"class": "rec-sell", "text": f"⚠️ <b>IEȘI DIN: {pos['title']}</b>", "reason": f"Scor AI slab {current_score:.1f}."})
             if current_score < my_weakest_score:
                 my_weakest_score = current_score
@@ -282,7 +300,6 @@ def index():
     best_opp_score = 0
     best_opp_key = None
     
-    # 2. GENERARE LISTE
     smart_clusters = []   
     all_shared = []       
 
@@ -295,10 +312,9 @@ def index():
     for key in unique_markets:
         vol, users, parts = get_cluster_data_raw(key)
         
-        # Recalculam scorul LIVE pentru afisare (Fix pentru 5.0)
+        # Scor Live
         p_live = global_state['market_prices'].get(key, 0.5)
         created_at = global_state["cluster_created_at"].get(key, 0)
-        # Apelam functia de scor cu valorile actuale
         score = calc_score(vol, len(users), p_live, False, created_at)
         
         if len(users) >= 2:
@@ -320,11 +336,9 @@ def index():
                 "price": price_txt, "score_html": score_html
             }
 
-            # LISTA 1: TOATE COMUNE (All time)
             all_shared.append(cluster_obj)
 
-            # LISTA 2: CLUSTERE NOI (Strict dupa start bot)
-            # Conditii: Volum > $6000 SI Creat DUPA ce a pornit botul
+            # Doar ce e nou de cand a pornit botul
             is_new = False
             if created_at > global_state["bot_start_time"]:
                 is_new = True
@@ -332,7 +346,6 @@ def index():
             if vol >= MINI and is_new:
                 smart_clusters.append(cluster_obj)
             
-            # Logic pt Rec AI (Oportunitati)
             if key not in my_owned_markets and score > best_opp_score and vol >= MINI:
                 best_opp_score = score
                 best_opp_key = key
@@ -340,7 +353,6 @@ def index():
     smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
     all_shared.sort(key=lambda x: x["vol"], reverse=True)
 
-    # AI BUY / SWAP
     if best_opp_key and best_opp_score >= 8.0:
         recs.append({"class": "rec-buy", "text": f"🚀 <b>OPORTUNITATE: {best_opp_key.split('|')[0]}</b>", "reason": f"Scor {best_opp_score:.1f}. Cluster puternic & nou."})
     
@@ -376,13 +388,24 @@ def safe_float(v):
     try: return float(v)
     except: return 0.0
 
-def get_clob_price(token_id):
+# --- CACHED PRICE FETCHER ---
+def get_real_price(token_id):
     if not token_id: return 0
+    
+    # Check Cache
+    if token_id in price_cache:
+        ts, price = price_cache[token_id]
+        if time.time() - ts < 60: # Cache valabil 60s
+            return price
+            
     try:
         r = requests.get(API_CLOB, params={"token_id": token_id, "side": "buy"}, timeout=2)
         if r.status_code == 200:
             data = r.json()
-            return safe_float(data.get("price"))
+            price = safe_float(data.get("price"))
+            if price > 0:
+                price_cache[token_id] = (time.time(), price)
+                return price
     except: pass
     return 0
 
@@ -401,7 +424,9 @@ def sync_trader_positions():
                     outcome = item.get("outcome", "YES").upper()
                     
                     p = safe_float(item.get("price"))
-                    if p == 0: p = get_clob_price(item.get("asset"))
+                    # Daca API positions da 0, intrebam CLOB
+                    if p == 0: p = get_real_price(item.get("asset"))
+                    # Fallback
                     if p == 0: p = safe_float(item.get("avgBuyPrice"))
                     
                     val = size * p
@@ -431,16 +456,15 @@ def sync_portfolio():
                 outcome = item.get("outcome", "YES").upper()
                 
                 p = safe_float(item.get("price"))
-                if p == 0: p = get_clob_price(item.get("asset"))
+                if p == 0: p = get_real_price(item.get("asset"))
                 if p == 0: p = safe_float(item.get("avgBuyPrice"))
                 
-                # Ultimul resort: pretul din memorie
                 if p == 0: p = global_state["market_prices"].get(f"{title}|{outcome}", 0)
 
                 value = size * p
                 
                 if p > 0: display_price = f"{p*100:.1f}¢"
-                else: display_price = "0.0¢"
+                else: display_price = "N/A"
 
                 real_portfolio.append({
                     "title": title, "outcome": outcome,
@@ -464,28 +488,18 @@ def get_usd(e):
     try: return float(e.get("size", 0)) * float(e.get("price", 0))
     except: return 0
 
-# --- SCORING CALIBRAT (NU MAI E BLOCAT LA 5) ---
 def calc_score(cluster_val, participants_count, price, is_ping_pong, created_at):
-    score = 5.0 # Baza
-    
-    # 1. BANI (Impact Masiv)
-    if cluster_val >= BIG: score += 2.5      # >20k -> 7.5
-    elif cluster_val >= NORMAL: score += 1.5 # >10k -> 6.5
-    elif cluster_val >= MINI: score += 1.0   # >6k -> 6.0
-    
-    # 2. PARTICIPANTI (Validare)
+    score = 5.0 
+    if cluster_val >= BIG: score += 2.5      
+    elif cluster_val >= NORMAL: score += 1.5 
+    elif cluster_val >= MINI: score += 1.0   
     if participants_count >= 3: score += 1.5
     elif participants_count == 2: score += 0.5
-    
-    # 3. PRET (Intrare)
     if price > 0:
         if price < 0.50: score += 1.0     
         elif price < 0.85: score += 0.5   
         elif price > 0.95: score -= 2.0   
-    
-    # 4. RISC
     if is_ping_pong: score -= 5.0 
-    
     return max(0.0, min(10.0, score))
 
 def check_nightly_summary():
@@ -505,7 +519,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: AI Recommendations\nFix: Dynamic Score\nNew Clusters: Strict Recent") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Error Loop (State Sanitizer)\nFix: $0 Price (Cache)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -567,8 +581,7 @@ def bot_loop():
                             is_ping_pong = True
                     if action == "buy" or action == "trade": global_state["last_buy_times"][pos_key] = ts
 
-                    created_at = global_state["cluster_created_at"].get(market_key, 0)
-                    current_score = calc_score(cluster_sum, participants_count, price, is_ping_pong, created_at)
+                    current_score = calc_score(cluster_sum, participants_count, price, is_ping_pong, 0)
                     global_state["scores"][market_key] = current_score
 
                     action_ro = "A CUMPĂRAT"
@@ -632,7 +645,6 @@ def bot_loop():
                             c_users_set.add(sub_k.split("|")[0])
                     
                     if len(c_users_set) >= 2 and c_total >= MINI:
-                        # MARCAM MOMENTUL APARITIEI CLUSTERULUI
                         if c_key not in global_state["cluster_created_at"]:
                             global_state["cluster_created_at"][c_key] = time.time()
 
@@ -646,7 +658,7 @@ def bot_loop():
 
                         global_state["cluster_participants"][c_key] = list(c_users_set)
 
-                        # ALERTA DOAR PENTRU CLUSTERE NOI/MARI
+                        if "clusters_sent" not in global_state: global_state["clusters_sent"] = {}
                         last_sent = global_state["clusters_sent"].get(c_key, 0)
                         if c_total > last_sent * 1.2:
                             created_ts = global_state["cluster_created_at"][c_key]
