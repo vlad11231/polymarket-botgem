@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "CLEAN & DISTINCT"
+# 1. CONFIGURARE "ULTIMATE FIX"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -17,18 +17,20 @@ CHAT_ID = "6854863928"
 
 PORT = int(os.getenv("PORT", 5000))
 
+# API-uri
 API_ACTIVITY = "https://data-api.polymarket.com/activity"
 API_POSITIONS = "https://data-api.polymarket.com/positions"
+API_CLOB = "https://clob.polymarket.com/price" # SURSA NOUA DE PRET REAL
 
-POLL = 60 
+POLL = 60  # Verifică la fiecare 60 secunde
 
-# Limite
+# --- LIMITE ALERTE ---
 MIN_BUY_ALERT = 800    
 MIN_SELL_ALERT = 1000  
 WHALE_ALERT = 5000      
-MIN_DASHBOARD_LOG = 500 
+MIN_DASHBOARD_LOG = 500 # (REQ: $500 Istoric)
 
-# Clustere
+# --- LIMITE CLUSTERE ---
 MINI = 6000      
 NORMAL = 10000
 BIG = 20000
@@ -63,7 +65,7 @@ global_state = {
     "market_prices": {},  
     "last_buy_times": {}, 
     "cluster_participants": {}, 
-    "cluster_created_at": {}, # Timestamp creare cluster
+    "cluster_created_at": {},
     "last_summary_day": "",
     "nightly_stats": {"new_clusters": 0, "big_exits": 0},
     "last_update": "Never"
@@ -92,7 +94,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Dashboard</title>
+    <title>PolyBot Ultimate</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -144,7 +146,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💼 Portofoliul Tău ({{ self_name }})</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare ($)</th><th>Preț Intrare/Curent</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Acțiuni</th><th>Valoare Reală ($)</th><th>Preț Curent</th></tr></thead>
             <tbody>
                 {% for pos in state.my_portfolio %}
                 <tr class="self-row">
@@ -188,7 +190,7 @@ HTML_TEMPLATE = """
     <div class="card">
         <h3>💰 Top Investiții Comune (All Time - Total Deținut)</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț Mediu</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total Deținut ($)</th><th>Preț Curent</th></tr></thead>
             <tbody>
                 {% for c in all_shared %}
                 <tr>
@@ -256,7 +258,6 @@ def index():
         m_key = f"{pos['title']}|{pos['outcome']}"
         my_owned_markets.append(m_key)
         try:
-            # Extragem pretul numeric din string-ul afisat
             p_val = float(pos['price']) / 100.0
         except: p_val = 0.0
         
@@ -277,7 +278,6 @@ def index():
     smart_clusters = []   
     all_shared = []       
 
-    # Colectam toate cheile unice
     unique_markets = set()
     for pos_k in global_state["positions"]:
         parts = pos_k.split("|")
@@ -288,7 +288,6 @@ def index():
         vol, users, parts = get_cluster_data_raw(key)
         score = global_state["scores"].get(key, 5.0)
         
-        # Numai daca sunt 2 oameni
         if len(users) >= 2:
             sums = {}
             for name, val in parts: sums[name] = sums.get(name, 0) + val
@@ -308,33 +307,25 @@ def index():
                 "price": price, "score_html": score_html
             }
 
-            # LISTA 1: TOATE COMUNE (Top 20)
             all_shared.append(cluster_obj)
 
-            # LISTA 2: CLUSTERE NOI SI MARI
-            # Conditii: Volum > $6000 SI Creat recent (< 7 zile)
             created_at = global_state["cluster_created_at"].get(key, 0)
             is_new = False
             if created_at > 0:
                 if datetime.fromtimestamp(created_at) > datetime.now() - timedelta(days=7):
                     is_new = True
             else:
-                # Daca e prima data cand ruleaza, le consideram noi pe toate cele mari
                 is_new = True
 
             if vol >= MINI and is_new:
                 smart_clusters.append(cluster_obj)
-                
-                # Logic pt Rec AI
                 if key not in my_owned_markets and score > best_opp_score:
                     best_opp_score = score
                     best_opp_key = key
 
-    # Sortare
     smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
     all_shared.sort(key=lambda x: x["vol"], reverse=True)
 
-    # AI SWAP
     if best_opp_key and best_opp_score >= 8.5:
         recs.append({"class": "rec-buy", "text": f"🚀 <b>INTRĂ PE: {best_opp_key.split('|')[0]}</b>", "reason": f"Scor {best_opp_score:.1f}. Cluster puternic."})
     
@@ -354,7 +345,7 @@ def index():
     )
 
 # ==========================================
-# 4. LOGICA & SYNC (FIXED PRICE)
+# 4. LOGICA & SYNC (CU CLOB FETCH)
 # ==========================================
 
 def tg(msg):
@@ -370,8 +361,19 @@ def safe_float(v):
     try: return float(v)
     except: return 0.0
 
+# --- NOU: FETCH DIRECT DIN CLOB (PRET REAL) ---
+def get_clob_price(token_id):
+    if not token_id: return 0
+    try:
+        r = requests.get(API_CLOB, params={"token_id": token_id}, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            return safe_float(data.get("price"))
+    except: pass
+    return 0
+
 def sync_trader_positions():
-    print("♻️ Sincronizare Traderi (pentru tabelul comun)...")
+    print("♻️ Sincronizare Traderi (Live CLOB)...")
     for name, addr in TRADERS.items():
         try:
             r = requests.get(API_POSITIONS, params={"user": addr}, timeout=5)
@@ -384,19 +386,22 @@ def sync_trader_positions():
                     title = item.get("title", "Unknown")
                     outcome = item.get("outcome", "YES").upper()
                     
-                    # 🔴 FIX: FARA 0.5. Daca e 0, ramane 0.
-                    p_live = safe_float(item.get("price"))
-                    p_avg = safe_float(item.get("avgBuyPrice"))
+                    # 1. Pret API
+                    p = safe_float(item.get("price"))
                     
-                    # Prioritate: Live > Avg
-                    p = p_live if p_live > 0 else p_avg
+                    # 2. Daca e 0, cerem CLOB
+                    if p == 0:
+                        asset_id = item.get("asset")
+                        p = get_clob_price(asset_id)
+                    
+                    # 3. Fallback entry
+                    if p == 0: p = safe_float(item.get("avgBuyPrice"))
                     
                     val = size * p
                     
                     pos_key = f"{name}|{title}|{outcome}"
                     global_state["positions"][pos_key] = val
                     
-                    # Salvam pretul in memorie daca e valid
                     if p > 0:
                         market_key = f"{title}|{outcome}"
                         global_state["market_prices"][market_key] = p
@@ -405,7 +410,7 @@ def sync_trader_positions():
             print(f"⚠️ Err sync trader {name}: {e}")
 
 def sync_portfolio():
-    print("♻️ Sincronizare Portofoliu Tău...")
+    print("♻️ Sincronizare Portofoliu Tău (Live CLOB)...")
     try:
         r = requests.get(API_POSITIONS, params={"user": SELF_ADDR}, timeout=10)
         if r.status_code == 200:
@@ -419,26 +424,32 @@ def sync_portfolio():
                 title = item.get("title", "Unknown Market")
                 outcome = item.get("outcome", "YES").upper()
                 
-                # 🔴 FIX: FARA 0.5 FALLBACK
-                p_live = safe_float(item.get("price"))
-                p_avg = safe_float(item.get("avgBuyPrice"))
+                # 1. Pret API
+                price_live = safe_float(item.get("price"))
                 
-                # Pret Calcul: Live > Avg > Memory
-                p_calc = p_live if p_live > 0 else p_avg
-                if p_calc == 0:
-                    p_calc = global_state["market_prices"].get(f"{title}|{outcome}", 0)
+                # 2. Daca e 0, cerem CLOB
+                if price_live == 0:
+                    asset_id = item.get("asset")
+                    price_live = get_clob_price(asset_id)
 
-                value = size * p_calc
+                # 3. Fallback Entry
+                price_entry = safe_float(item.get("avgBuyPrice"))
                 
-                # Display Text
-                if p_live > 0: display_price = f"{p_live*100:.1f}¢"
-                elif p_avg > 0: display_price = f"{p_avg*100:.1f}¢ (Intrare)"
+                # Calcul final
+                calc_price = price_live if price_live > 0 else (price_entry if price_entry > 0 else 0)
+                if calc_price == 0:
+                    calc_price = global_state["market_prices"].get(f"{title}|{outcome}", 0)
+
+                value = size * calc_price
+                
+                if price_live > 0: display_price = f"{price_live*100:.1f}¢"
+                elif price_entry > 0: display_price = f"{price_entry*100:.1f}¢ (Intrare)"
                 else: display_price = "N/A"
 
                 real_portfolio.append({
                     "title": title, "outcome": outcome,
                     "size": f"{size:.0f}", "value": f"{value:.0f}",
-                    "price": f"{p_calc*100:.1f}",
+                    "price": f"{calc_price*100:.1f}",
                     "display_price": display_price
                 })
             
@@ -491,7 +502,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM UPDATE</b>\nRemoved 50c Fallback\nDistinct Dashboard Lists") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: CLOB Live Price\nFix: $0 Values") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -529,14 +540,11 @@ def bot_loop():
                     
                     action = e.get("type", "").lower() 
                     val = get_usd(e)
-                    # 🔴 FIX: FARA 0.5
-                    price = float(e.get("price", 0))
+                    price = float(e.get("price", 0.5))
                     
                     pos_key = f"{name}|{title}|{side}"
                     market_key = f"{title}|{side}"
-                    
-                    if price > 0:
-                        global_state["market_prices"][market_key] = price
+                    global_state["market_prices"][market_key] = price
 
                     cluster_participants = set()
                     cluster_sum = 0
@@ -603,7 +611,6 @@ def bot_loop():
 
                 global_state["last"][name] = new_max_ts
 
-            # CLUSTERE UPDATE
             processed_clusters = set()
             for k, v in global_state["positions"].items():
                 parts = k.split("|")
