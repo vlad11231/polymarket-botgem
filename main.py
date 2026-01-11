@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "QUANTUM FUND"
+# 1. CONFIGURARE "MORNING BRIEFING"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -23,21 +23,21 @@ API_CLOB = "https://clob.polymarket.com/price"
 
 POLL = 60 
 
-# Limite Alerte
+# Limite
 MIN_BUY_ALERT = 800    
 MIN_SELL_ALERT = 1000  
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
 
-# Limite Clustere
+# Clustere
 MINI = 6000      
 NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 
-# Shadow Trading (Money Management)
+# Shadow
 SHADOW_START_CAPITAL = 2000
-BASE_BET_SIZE = 200 # Miza standard
+BASE_BET_SIZE = 200 
 
 RO = pytz.timezone("Europe/Bucharest")
 DATA_DIR = Path("/app/data") if os.getenv("RAILWAY_ENVIRONMENT") else Path(".")
@@ -46,14 +46,11 @@ STATE_FILE = DATA_DIR / "state.json"
 SELF = "Pufu"
 SELF_ADDR = "0x872ec2644addbbf526744d8e3cb6b0356c0b73d7"
 
-# LISTA TRADERI CU GREUTATE (WEIGHT)
-# Tier 1: Balenele Supreme (Impact mare la scor)
-# Tier 2: Traderi buni
 TRADERS = {
     "Euan": {"addr": "0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1", "tier": 1},
     "Car": {"addr": "0x7c3db723f1d4d8cb9c550095203b686cb11e5c6b", "tier": 1},
-    "Scottilicious": {"addr": "0x000d257d2dc7616feaef4ae0f14600fdf50a758e", "tier": 1},
     "JJo": {"addr": "0xc4086b708cd3a50880b7069add1a1a80000f4675", "tier": 2},
+    "Scottilicious": {"addr": "0x000d257d2dc7616feaef4ae0f14600fdf50a758e", "tier": 1},
     "aenews": {"addr": "0x44c1dfe43260c94ed4f1d00de2e1f80fb113ebc1", "tier": 2},
     "Dropper": {"addr": "0x6bab41a0dc40d6dd4c1a915b8c01969479fd1292", "tier": 2}
 }
@@ -118,7 +115,20 @@ def save():
     STATE_FILE.write_text(json.dumps(global_state, indent=2))
 
 # ==========================================
-# 3. DASHBOARD WEB
+# 3. HELPER GLOBAL (Pt. Dashboard & Raport)
+# ==========================================
+def get_cluster_data_raw(key):
+    total = 0
+    participants = []
+    for pos_k, val in global_state["positions"].items():
+        if f"{key}" in pos_k and not pos_k.startswith(SELF):
+            total += val
+            name = pos_k.split("|")[0]
+            participants.append((name, val))
+    return total, list(set([p[0] for p in participants])), participants
+
+# ==========================================
+# 4. DASHBOARD WEB
 # ==========================================
 app = Flask(__name__)
 
@@ -126,7 +136,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Quantum</title>
+    <title>PolyBot Morning Brief</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -164,7 +174,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h1>🤖 PolyBot Quantum Dashboard</h1>
+        <h1>🤖 PolyBot Dashboard</h1>
         <div>Update: <b>{{ state.last_update }}</b> | <span style="color:#00b894">● Online</span></div>
     </div>
 
@@ -220,7 +230,7 @@ HTML_TEMPLATE = """
                 <tr>
                     <td>{{ s.title }}</td>
                     <td><span class="{{ 'yes' if 'YES' in s.side else 'no' }}">{{ s.side }}</span></td>
-                    <td>${{ s.entry_val }}</td> {# Afisam cat a pariat #}
+                    <td>${{ s.entry_val }}</td> 
                     <td>{{ s.entry_price }}¢</td>
                     <td><b>${{ s.curr_val }}</b></td>
                     <td class="{{ 'profit-plus' if s.roi >= 0 else 'profit-minus' }}">{{ s.roi }}%</td>
@@ -307,22 +317,11 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    def get_cluster_data_raw(key):
-        total = 0
-        participants = []
-        for pos_k, val in global_state["positions"].items():
-            if f"{key}" in pos_k and not pos_k.startswith(SELF):
-                total += val
-                name = pos_k.split("|")[0]
-                participants.append((name, val))
-        return total, list(set([p[0] for p in participants])), participants
-
     recs = []
     my_weakest_score = 10.0
     my_weakest_market = None
     my_owned_markets = []
 
-    # Analiza Portofoliu
     for pos in global_state["my_portfolio"]:
         m_key = f"{pos['title']}|{pos['outcome']}"
         my_owned_markets.append(m_key)
@@ -361,9 +360,8 @@ def index():
         p_live = global_state['market_prices'].get(key, 0.5)
         created_at = global_state["cluster_created_at"].get(key, 0)
         
-        # SCORING QUANTUM
+        # Recalculam scorul pt display
         score = calc_smart_score(vol, users, p_live, False)
-        global_state["scores"][key] = score # Update scor global
         
         if len(users) >= 2:
             sums = {}
@@ -403,7 +401,6 @@ def index():
         if my_weakest_score < 5.0 and best_opp_score > 7.5:
             recs.append({"class": "rec-swap", "text": f"🔄 <b>SWAP: {my_weakest_market} ➔ {best_opp_key.split('|')[0]}</b>", "reason": "Upgrade Scor."})
 
-    # Shadow Prep
     shadow_display = []
     shadow_holdings_val = 0
     for p in global_state["shadow"]["positions"]:
@@ -436,7 +433,7 @@ def index():
     )
 
 # ==========================================
-# 4. LOGICA & SYNC
+# 5. LOGICA & SYNC
 # ==========================================
 
 def tg(msg):
@@ -467,66 +464,54 @@ def get_real_price(token_id):
     except: pass
     return 0
 
-# --- ALGORTIM "QUANTUM SCORE" ---
 def calc_smart_score(cluster_val, participants_list, price, is_ping_pong):
-    score = 5.0 # Baza
+    score = 5.0 
     
     # 1. Whale Weighting
     has_tier1 = False
-    has_tier2 = False
     for user in participants_list:
         tier = TRADERS.get(user, {}).get("tier", 3)
         if tier == 1: 
-            score += 1.5 # Bonus mare pt Euan/Car/Scott
+            score += 1.5 
             has_tier1 = True
         elif tier == 2:
-            score += 0.5 # Bonus mediu
-            has_tier2 = True
+            score += 0.5 
     
     # 2. Volum
     if cluster_val >= BIG: score += 2.0
     elif cluster_val >= NORMAL: score += 1.0
     
-    # 3. Solo Risk (Daca e doar unul singur si nu e Tier 1)
+    # 3. Solo Risk
     if len(participants_list) == 1 and not has_tier1:
         score -= 2.0 
     
-    # 4. Pret (Risk/Reward)
+    # 4. Pret
     if price > 0:
         if price < 0.50: score += 1.0     
         elif price < 0.80: score += 0.5
-        elif price > 0.92: score -= 2.5 # Risk prea mare
+        elif price > 0.92: score -= 2.5 
         
     if is_ping_pong: score -= 5.0
     
     return max(0.0, min(10.0, score))
 
-# --- DYNAMIC BET SIZING ---
 def calculate_bet_size(score, price):
-    # Base bet
     bet = BASE_BET_SIZE
-    
-    # Scaling factor based on Score
-    if score >= 9.0: bet *= 2.0    # 200 * 2 = 400
-    elif score >= 8.0: bet *= 1.5  # 200 * 1.5 = 300
-    elif score < 6.0: bet *= 0.5   # 100
-    
-    # Risk adjustment based on Price
-    if price > 0.90: bet *= 0.5    # Reduce risc la pret mare
-    
+    if score >= 9.0: bet *= 2.0
+    elif score >= 8.0: bet *= 1.5
+    elif score < 6.0: bet *= 0.5
+    if price > 0.90: bet *= 0.5
     return int(bet)
 
 def update_shadow_portfolio():
     shadow = global_state["shadow"]
     active_keys = []
     
-    # 1. Exit Logic
     for p in shadow["positions"]:
         market_key = p["key"]
         curr_price = global_state["market_prices"].get(market_key, p["entry_price"])
         score = global_state["scores"].get(market_key, 5.0)
         
-        # Vinde daca: Profit Target SAU Scor scazut
         if curr_price >= 0.95 or score < 4.0:
             sale_val = p["shares"] * curr_price
             profit = sale_val - p["cost"]
@@ -536,15 +521,12 @@ def update_shadow_portfolio():
             active_keys.append(p)
     shadow["positions"] = active_keys 
 
-    # 2. Entry Logic (Smart Size)
     for key, score in global_state["scores"].items():
         owned = any(p["key"] == key for p in shadow["positions"])
         if not owned and score >= 8.0:
             price = global_state["market_prices"].get(key, 0)
             if 0.05 < price < 0.88:
-                # CALCULAM MIZA DINAMIC
                 bet_size = calculate_bet_size(score, price)
-                
                 if shadow["cash"] >= bet_size:
                     shares = bet_size / price
                     shadow["positions"].append({
@@ -611,24 +593,83 @@ def get_usd(e):
     try: return float(e.get("size", 0)) * float(e.get("price", 0))
     except: return 0
 
+# --- NIGHTLY REPORT UPGRADED ---
 def check_nightly_summary():
     now = datetime.now(RO)
     today_str = now.strftime("%Y-%m-%d")
+    
     if now.hour == 7 and global_state["last_summary_day"] != today_str:
-        total_val = sum(float(p["value"]) for p in global_state["my_portfolio"])
-        tg(f"☕ <b>Raport Dimineața</b>\nClustere Noi: {global_state['nightly_stats']['new_clusters']}\nPortofoliu: ${total_val:.0f}")
+        # 1. Analiza Portofoliu
+        portfolio_msg = "💼 <b>ANALIZĂ PORTOFOLIU:</b>\n"
+        total_val = 0
+        actions_needed = False
+        
+        sync_portfolio() 
+        for pos in global_state["my_portfolio"]:
+            title = pos['title']
+            side = pos['outcome']
+            val = float(pos['value'])
+            total_val += val
+            try: price = float(pos['price'].replace('¢', '').split()[0]) / 100.0
+            except: price = 0.0
+            m_key = f"{title}|{side}"
+            score = global_state["scores"].get(m_key, 5.0)
+            
+            advice = "✅ HOLD"
+            if price >= 0.95: 
+                advice = "💰 <b>TAKE PROFIT</b> (Preț mare)"
+                actions_needed = True
+            elif score < 4.0: 
+                advice = "⚠️ <b>CUT LOSS</b> (Scor mic)"
+                actions_needed = True
+            
+            portfolio_msg += f"• {title} ({side})\n   👉 {advice} | Scor: {score:.1f} | ${val:.0f}\n"
+
+        if not actions_needed: portfolio_msg += "<i>(Nicio urgență. Portofoliu stabil.)</i>"
+        portfolio_msg += f"\n💰 <b>Total Equity: ${total_val:.0f}</b>\n\n"
+
+        # 2. Top Clustere
+        clusters_msg = "🏆 <b>TOP CLUSTERE & PARTICIPANȚI:</b>\n"
+        active_markets = []
+        unique_keys = set()
+        for k in global_state["positions"]:
+            parts = k.split("|")
+            if len(parts) == 3 and parts[0] != SELF: unique_keys.add(f"{parts[1]}|{parts[2]}")
+        
+        for key in unique_keys:
+            vol, users, _ = get_cluster_data_raw(key)
+            # Recalculam scorul pentru raport
+            p_live = global_state['market_prices'].get(key, 0.5)
+            score = calc_smart_score(vol, users, p_live, False)
+            
+            if vol >= MINI and len(users) >= 2:
+                active_markets.append({"key": key, "vol": vol, "score": score, "users": users})
+        
+        active_markets.sort(key=lambda x: x["score"], reverse=True)
+        
+        if not active_markets:
+            clusters_msg += "<i>(Liniște pe piață momentan...)</i>"
+        else:
+            for m in active_markets[:5]: 
+                title = m['key'].split('|')[0]
+                side = m['key'].split('|')[1]
+                user_str = ", ".join(m['users'][:3]) # Primii 3
+                if len(m['users']) > 3: user_str += f" + {len(m['users'])-3} alții"
+                clusters_msg += f"🔥 <b>{title}</b> ({side})\n   🎯 Scor: <b>{m['score']:.1f}</b> | Vol: ${m['vol']:.0f}\n   👥 {user_str}\n\n"
+
+        final_msg = f"☕ <b>RAPORT EXTINS DIMINEAȚA</b> ☀️\n\n{portfolio_msg}{clusters_msg}<i>Verifică Dashboard pentru detalii complete.</i>"
+        tg(final_msg)
         global_state["last_summary_day"] = today_str
-        global_state["nightly_stats"] = {"new_clusters": 0, "big_exits": 0}
         save()
 
 # ==========================================
-# 5. LOOP PRINCIPAL
+# 6. LOOP PRINCIPAL
 # ==========================================
 
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nMode: Quantum Fund\nLogic: Whale Weighted + Dynamic Sizing") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nMode: Morning Briefing Ready") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -693,9 +734,8 @@ def bot_loop():
                             is_ping_pong = True
                     if action == "buy": global_state["last_buy_times"][pos_key] = ts
 
-                    # SCOR QUANTUM
-                    cluster_users_list = list(cluster_participants)
-                    current_score = calc_smart_score(cluster_sum, cluster_users_list, price, is_ping_pong)
+                    c_list_users = list(cluster_participants)
+                    current_score = calc_smart_score(cluster_sum, c_list_users, price, is_ping_pong)
                     global_state["scores"][market_key] = current_score
 
                     action_ro = "A CUMPĂRAT"
@@ -779,7 +819,6 @@ def bot_loop():
                         last_sent = global_state["clusters_sent"].get(c_key, 0)
                         if loop_count > 1 and c_total > last_sent * 1.2:
                             c_list_users = list(c_users_set)
-                            # SCOR QUANTUM
                             sc = calc_smart_score(c_total, c_list_users, global_state["market_prices"].get(c_key, 0.5), False)
                             
                             c_side = c_key.split("|")[1]
