@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "MULTI-AI"
+# 1. CONFIGURARE "PRECISION FIX"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -114,7 +114,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Multi-Opp</title>
+    <title>PolyBot Precision</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -272,13 +272,11 @@ def index():
                 participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
 
-    # 1. AI RECS
     recs = []
     my_weakest_score = 10.0
     my_weakest_market = None
     my_owned_markets = []
 
-    # -- Analiza Portofoliu --
     for pos in global_state["my_portfolio"]:
         m_key = f"{pos['title']}|{pos['outcome']}"
         my_owned_markets.append(m_key)
@@ -296,7 +294,6 @@ def index():
                 my_weakest_score = current_score
                 my_weakest_market = pos['title']
 
-    # -- Analiza Oportunitati (Multiple) --
     best_opp_score = 0
     best_opp_key = None
     potential_buys = []
@@ -345,10 +342,8 @@ def index():
             if vol >= MINI and is_new:
                 smart_clusters.append(cluster_obj)
             
-            # Colectam potentiale cumparari (Top 3)
             if key not in my_owned_markets and score >= 8.0 and vol >= MINI:
                 potential_buys.append((key, score))
-                # Pastram si cel mai bun pt swap logic
                 if score > best_opp_score:
                     best_opp_score = score
                     best_opp_key = key
@@ -356,10 +351,7 @@ def index():
     smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
     all_shared.sort(key=lambda x: x["vol"], reverse=True)
 
-    # -- RECOMANDARI MULTIPLE --
-    # Sortam descrescator dupa scor si luam top 3
     potential_buys.sort(key=lambda x: x[1], reverse=True)
-    
     for opp_key, opp_score in potential_buys[:3]:
         recs.append({
             "class": "rec-buy", 
@@ -367,7 +359,6 @@ def index():
             "reason": f"Scor {opp_score:.1f}. Cluster puternic."
         })
     
-    # SWAP Logic (doar cu cel mai bun)
     if my_weakest_market and best_opp_key:
         if my_weakest_score < 5.0 and best_opp_score > 7.5:
             recs.append({"class": "rec-swap", "text": f"🔄 <b>SWAP: {my_weakest_market} ➔ {best_opp_key.split('|')[0]}</b>", "reason": "Upgrade Scor (AI Optimization)."})
@@ -464,7 +455,6 @@ def sync_portfolio():
                 p = safe_float(item.get("price"))
                 if p == 0: p = get_real_price(item.get("asset"))
                 if p == 0: p = safe_float(item.get("avgBuyPrice"))
-                
                 if p == 0: p = global_state["market_prices"].get(f"{title}|{outcome}", 0)
 
                 value = size * p
@@ -525,7 +515,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFeatures: Multi-Opp AI & Fixed Status") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: BUY vs SELL Detection\nFix: Whale Dump Alert") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -558,15 +548,22 @@ def bot_loop():
                     if ts > new_max_ts: new_max_ts = ts
 
                     title = e.get("title", "Unknown")
-                    raw_side = e.get("outcome", e.get("side", "YES"))
-                    side = raw_side.upper() 
+                    outcome = e.get("outcome", "YES").upper() # TOKEN (Asset)
                     
-                    action = e.get("type", "").lower() 
+                    # 🔴 FIX CRITIC: Determinare Actiune din 'side' (BUY/SELL)
+                    # Nu ne mai bazam pe 'type': 'TRADE'
+                    event_side = e.get("side", "BUY").upper()
+                    
+                    if event_side == "SELL":
+                        action = "sell"
+                    else:
+                        action = "buy"
+                    
                     val = get_usd(e)
                     price = float(e.get("price", 0))
                     
-                    pos_key = f"{name}|{title}|{side}"
-                    market_key = f"{title}|{side}"
+                    pos_key = f"{name}|{title}|{outcome}"
+                    market_key = f"{title}|{outcome}"
                     
                     if price > 0:
                         global_state["market_prices"][market_key] = price
@@ -585,28 +582,28 @@ def bot_loop():
                         last_buy = global_state["last_buy_times"].get(pos_key, 0)
                         if ts - last_buy < 3600 and last_buy != 0: 
                             is_ping_pong = True
-                    if action == "buy" or action == "trade": global_state["last_buy_times"][pos_key] = ts
+                    if action == "buy": global_state["last_buy_times"][pos_key] = ts
 
                     current_score = calc_score(cluster_sum, participants_count, price, is_ping_pong, 0)
                     global_state["scores"][market_key] = current_score
 
                     action_ro = "A CUMPĂRAT"
                     if action == "sell": action_ro = "A VÂNDUT"
-                    side_emoji = "🟢" if "YES" in side else "🔴"
-                    side_formatted = f"{side_emoji} <b>{side}</b>"
+                    side_emoji = "🟢" if "YES" in outcome else "🔴"
+                    side_formatted = f"{side_emoji} <b>{outcome}</b>"
                     
                     if name == SELF:
-                        if action in ["buy", "trade"]:
+                        if action == "buy":
                             tg(f"🔔 <b>TU {action_ro} {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}/10</b>")
                         elif action == "sell":
                             tg(f"🔔 <b>TU {action_ro} {side_formatted}</b>\n🏆 {title}\nRecuperat: ${val:.0f}")
                         threading.Thread(target=sync_portfolio).start()
 
                     else:
-                        if action in ["buy", "trade"]:
+                        if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             if val >= MIN_BUY_ALERT:
-                                whale_tag = " 🐋 <b>WHALE MOVE!</b>" if val >= WHALE_ALERT else ""
+                                whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 {val:.0f} @ {price*100:.1f}¢\n🎯 Scor: <b>{current_score:.1f}/10</b>")
 
                         elif action == "sell":
@@ -615,11 +612,11 @@ def bot_loop():
                             
                             if val >= MIN_SELL_ALERT:
                                 reason = "(Profit)" if price > 0.90 else "(Loss)"
-                                if cluster_sum + val >= MINI and participants_count >= 2:
-                                    pp_warn = "⚠️ <b>PING-PONG</b>" if is_ping_pong else "📉 <b>CLUSTER SLĂBIT</b>"
-                                    tg(f"{pp_warn}\n👤 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f} {reason}")
-                                else:
-                                    tg(f"📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f} {reason}")
+                                pp_warn = ""
+                                if is_ping_pong: pp_warn = "⚠️ <b>PING-PONG</b>"
+                                elif val >= WHALE_ALERT: pp_warn = "🐋 <b>WHALE DUMP!</b>"
+                                
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f} {reason}")
 
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
@@ -628,7 +625,7 @@ def bot_loop():
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
                             "trader": name, "action": action,
-                            "market": f"{title} ({side})", "value": int(val), 
+                            "market": f"{title} ({outcome})", "value": int(val), 
                             "price_fmt": f"{price*100:.1f}¢",
                             "note": note
                         })
@@ -651,17 +648,16 @@ def bot_loop():
                             c_users_set.add(sub_k.split("|")[0])
                     
                     if len(c_users_set) >= 2 and c_total >= MINI:
-                        # KEY FIX: Daca suntem in primul loop, setam 'created_at' la 0 (Istoric)
                         if c_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
-                                global_state["cluster_created_at"][c_key] = 0 # Marcam ca VECHI
-                                global_state["clusters_sent"][c_key] = c_total # Marcam ca trimis (Silent)
+                                global_state["cluster_created_at"][c_key] = 0 
+                                global_state["clusters_sent"][c_key] = c_total
                             else:
-                                global_state["cluster_created_at"][c_key] = time.time() # Marcam ca NOU
+                                global_state["cluster_created_at"][c_key] = time.time()
 
                         known_users = set(global_state["cluster_participants"].get(c_key, []))
                         new_users = c_users_set - known_users
-                        if new_users and len(known_users) > 0 and loop_count > 1: # Doar dupa start
+                        if new_users and len(known_users) > 0 and loop_count > 1:
                             new_guy = list(new_users)[0]
                             c_side = c_key.split("|")[1]
                             c_emoji = "🟢" if "YES" in c_side else "🔴"
@@ -670,8 +666,6 @@ def bot_loop():
                         global_state["cluster_participants"][c_key] = list(c_users_set)
 
                         last_sent = global_state["clusters_sent"].get(c_key, 0)
-                        
-                        # ALERTE DE CLUSTER DOAR DUPA LOOP 1 (SILENT START)
                         if loop_count > 1 and c_total > last_sent * 1.2:
                             created_ts = global_state["cluster_created_at"][c_key]
                             sc = calc_score(c_total, len(c_users_set), global_state["market_prices"].get(c_key, 0.5), False, created_ts)
