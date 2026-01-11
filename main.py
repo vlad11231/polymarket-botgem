@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ULTIMATE FIX"
+# 1. CONFIGURARE "HEAVY DUTY PRICING"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -17,20 +17,19 @@ CHAT_ID = "6854863928"
 
 PORT = int(os.getenv("PORT", 5000))
 
-# API-uri
 API_ACTIVITY = "https://data-api.polymarket.com/activity"
 API_POSITIONS = "https://data-api.polymarket.com/positions"
-API_CLOB = "https://clob.polymarket.com/price" # SURSA NOUA DE PRET REAL
+API_CLOB = "https://clob.polymarket.com/price" 
 
-POLL = 60  # Verifică la fiecare 60 secunde
+POLL = 60 
 
-# --- LIMITE ALERTE ---
+# --- LIMITE ---
 MIN_BUY_ALERT = 800    
 MIN_SELL_ALERT = 1000  
 WHALE_ALERT = 5000      
-MIN_DASHBOARD_LOG = 500 # (REQ: $500 Istoric)
+MIN_DASHBOARD_LOG = 500 
 
-# --- LIMITE CLUSTERE ---
+# --- CLUSTERE ---
 MINI = 6000      
 NORMAL = 10000
 BIG = 20000
@@ -94,7 +93,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Ultimate</title>
+    <title>PolyBot Heavy Duty</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -139,7 +138,7 @@ HTML_TEMPLATE = """
             </div>
             {% endfor %}
         {% else %}
-            <div style="color:#888; font-style:italic;">✅ Nicio acțiune critică necesară.</div>
+            <div style="color:#888; font-style:italic;">✅ Se analizează datele...</div>
         {% endif %}
     </div>
 
@@ -154,10 +153,10 @@ HTML_TEMPLATE = """
                     <td><span class="{{ 'yes' if 'YES' in pos.outcome else 'no' }}">{{ pos.outcome }}</span></td>
                     <td>{{ pos.size }}</td>
                     <td><b>${{ pos.value }}</b></td>
-                    <td>{{ pos.display_price }}</td>
+                    <td>{{ pos.price }}¢</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele...</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#666;">Se încarcă datele din piață...</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -181,7 +180,7 @@ HTML_TEMPLATE = """
                     <td>{{ c.score_html|safe }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster <b>NOU</b> și <b>MARE</b> recent.</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster nou peste ${{ mini }}</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -204,7 +203,7 @@ HTML_TEMPLATE = """
                     <td>{{ c.price }}¢</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Se calculează pozițiile comune...</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#666;">Se scanează portofoliile traderilor...</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -248,7 +247,7 @@ def index():
                 participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
 
-    # --- 1. AI RECS ---
+    # 1. AI RECS
     recs = []
     my_weakest_score = 10.0
     my_weakest_market = None
@@ -274,7 +273,7 @@ def index():
     best_opp_score = 0
     best_opp_key = None
     
-    # --- 2. GENERARE LISTE ---
+    # 2. GENERARE LISTE
     smart_clusters = []   
     all_shared = []       
 
@@ -345,7 +344,7 @@ def index():
     )
 
 # ==========================================
-# 4. LOGICA & SYNC (CU CLOB FETCH)
+# 4. LOGICA & SYNC (HEAVY DUTY CLOB)
 # ==========================================
 
 def tg(msg):
@@ -361,11 +360,12 @@ def safe_float(v):
     try: return float(v)
     except: return 0.0
 
-# --- NOU: FETCH DIRECT DIN CLOB (PRET REAL) ---
+# --- FORTARE PRET DIN CLOB ---
 def get_clob_price(token_id):
     if not token_id: return 0
     try:
-        r = requests.get(API_CLOB, params={"token_id": token_id}, timeout=3)
+        # Request direct la order book
+        r = requests.get(API_CLOB, params={"token_id": token_id, "side": "buy"}, timeout=2)
         if r.status_code == 200:
             data = r.json()
             return safe_float(data.get("price"))
@@ -373,7 +373,7 @@ def get_clob_price(token_id):
     return 0
 
 def sync_trader_positions():
-    print("♻️ Sincronizare Traderi (Live CLOB)...")
+    print("♻️ Sincronizare Traderi (Force Price)...")
     for name, addr in TRADERS.items():
         try:
             r = requests.get(API_POSITIONS, params={"user": addr}, timeout=5)
@@ -386,15 +386,14 @@ def sync_trader_positions():
                     title = item.get("title", "Unknown")
                     outcome = item.get("outcome", "YES").upper()
                     
-                    # 1. Pret API
+                    # 1. Pret Standard
                     p = safe_float(item.get("price"))
                     
-                    # 2. Daca e 0, cerem CLOB
+                    # 2. Daca e 0 -> CLOB (Heavy Duty)
                     if p == 0:
-                        asset_id = item.get("asset")
-                        p = get_clob_price(asset_id)
+                        p = get_clob_price(item.get("asset"))
                     
-                    # 3. Fallback entry
+                    # 3. Fallback Entry
                     if p == 0: p = safe_float(item.get("avgBuyPrice"))
                     
                     val = size * p
@@ -403,14 +402,13 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     
                     if p > 0:
-                        market_key = f"{title}|{outcome}"
-                        global_state["market_prices"][market_key] = p
+                        global_state["market_prices"][f"{title}|{outcome}"] = p
                         
         except Exception as e:
             print(f"⚠️ Err sync trader {name}: {e}")
 
 def sync_portfolio():
-    print("♻️ Sincronizare Portofoliu Tău (Live CLOB)...")
+    print("♻️ Sincronizare Portofoliu Tău (Force Price)...")
     try:
         r = requests.get(API_POSITIONS, params={"user": SELF_ADDR}, timeout=10)
         if r.status_code == 200:
@@ -424,37 +422,29 @@ def sync_portfolio():
                 title = item.get("title", "Unknown Market")
                 outcome = item.get("outcome", "YES").upper()
                 
-                # 1. Pret API
-                price_live = safe_float(item.get("price"))
+                # 1. Pret Standard
+                p = safe_float(item.get("price"))
                 
-                # 2. Daca e 0, cerem CLOB
-                if price_live == 0:
-                    asset_id = item.get("asset")
-                    price_live = get_clob_price(asset_id)
+                # 2. Daca e 0 -> CLOB
+                if p == 0:
+                    p = get_clob_price(item.get("asset"))
 
                 # 3. Fallback Entry
-                price_entry = safe_float(item.get("avgBuyPrice"))
+                if p == 0: p = safe_float(item.get("avgBuyPrice"))
                 
-                # Calcul final
-                calc_price = price_live if price_live > 0 else (price_entry if price_entry > 0 else 0)
-                if calc_price == 0:
-                    calc_price = global_state["market_prices"].get(f"{title}|{outcome}", 0)
+                # 4. Fallback Memorie
+                if p == 0: p = global_state["market_prices"].get(f"{title}|{outcome}", 0)
 
-                value = size * calc_price
+                value = size * p
                 
-                if price_live > 0: display_price = f"{price_live*100:.1f}¢"
-                elif price_entry > 0: display_price = f"{price_entry*100:.1f}¢ (Intrare)"
-                else: display_price = "N/A"
-
                 real_portfolio.append({
                     "title": title, "outcome": outcome,
                     "size": f"{size:.0f}", "value": f"{value:.0f}",
-                    "price": f"{calc_price*100:.1f}",
-                    "display_price": display_price
+                    "price": f"{p*100:.1f}"
                 })
             
             global_state["my_portfolio"] = real_portfolio
-            print(f"✅ Portofoliu Sync: {len(real_portfolio)} poziții.")
+            print(f"✅ Portofoliu Sync: {len(real_portfolio)} poziții (Prețuri Reale).")
     except Exception as e:
         print(f"⚠️ Eroare Sync: {e}")
 
@@ -502,8 +492,9 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: CLOB Live Price\nFix: $0 Values") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Sifonare Preț CLOB\nFix: Totul Calculat Live") 
     
+    # Prima scanare e mai grea (ia preturile de la 0)
     sync_trader_positions()
     sync_portfolio()
     
