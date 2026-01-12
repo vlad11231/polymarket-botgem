@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "TITANIUM NIGHT-VISION"
+# 1. CONFIGURARE "ALL-IN-ONE STRICT"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -34,7 +34,9 @@ MINI = 6000
 NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
-MIN_TRADER_DISPLAY = 1000
+
+# FILTRU STRICT: Un trader e numarat in cluster doar daca are > $1000
+MIN_TRADER_VALID = 1000 
 
 # Shadow
 SHADOW_START_CAPITAL = 2000
@@ -64,7 +66,7 @@ global_state = {
     "bot_start_time": time.time(),
     "last": {},           
     "positions": {},      
-    "trader_entries": {}, # Stocheaza pretul de intrare (avgBuyPrice)
+    "trader_entries": {}, 
     "my_portfolio": [],   
     "trade_log": [],      
     "scores": {},         
@@ -74,7 +76,6 @@ global_state = {
     "cluster_created_at": {}, 
     "clusters_sent": {},
     "last_summary_day": "",
-    # Nightly acum stocheaza volumele per cluster DOAR de noapte
     "nightly_data": {}, 
     "shadow": {
         "cash": SHADOW_START_CAPITAL,
@@ -128,7 +129,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Night-Vision</title>
+    <title>PolyBot Strict</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -315,7 +316,7 @@ def index():
         for pos_k, val in global_state["positions"].items():
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
                 total += val
-                if val >= 10:
+                if val >= 10: # Anti-Dust $10
                     name = pos_k.split("|")[0]
                     participants.append((name, val))
         return total, list(set([p[0] for p in participants])), participants
@@ -554,7 +555,7 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
-                    # Store ENTRY PRICE for exit calculation
+                    # Store ENTRY PRICE
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: global_state["trader_entries"][pos_key] = entry
         except: pass
@@ -595,20 +596,46 @@ def get_usd(e):
     try: return float(e.get("size", 0)) * float(e.get("price", 0))
     except: return 0
 
-# --- NIGHTLY ONLY REPORT ---
+# --- NIGHTLY REPORT ---
 def check_nightly_summary():
     now = datetime.now(RO)
     today_str = now.strftime("%Y-%m-%d")
     
     if now.hour == 7 and global_state["last_summary_day"] != today_str:
-        # Build Report from NIGHTLY DATA
-        clusters_msg = "🏆 <b>RAPORT NOAPTE (22:00 - 07:00):</b>\n"
-        
+        # A. ANALIZA PORTOFOLIU
+        portfolio_msg = "💼 <b>ANALIZĂ PORTOFOLIU:</b>\n"
+        total_val = 0
+        actions_needed = False
+        sync_portfolio() 
+        for pos in global_state["my_portfolio"]:
+            title = pos['title']
+            side = pos['outcome']
+            val = float(pos['value'])
+            total_val += val
+            try: price = float(pos['price'].replace('¢', '').split()[0]) / 100.0
+            except: price = 0.0
+            m_key = f"{title}|{side}"
+            score = global_state["scores"].get(m_key, 5.0)
+            
+            advice = "✅ HOLD"
+            if price >= 0.95: 
+                advice = "💰 <b>TAKE PROFIT</b> (Preț mare)"
+                actions_needed = True
+            elif score < 4.0: 
+                advice = "⚠️ <b>CUT LOSS</b> (Scor mic)"
+                actions_needed = True
+            
+            portfolio_msg += f"• {title} ({side})\n   👉 {advice} | Scor: {score:.1f} | ${val:.0f}\n"
+
+        if not actions_needed: portfolio_msg += "<i>(Nicio urgență. Portofoliu stabil.)</i>\n"
+        portfolio_msg += f"\n💰 <b>Total Equity: ${total_val:.0f}</b>\n\n"
+
+        # B. RAPORT CLUSTERE NOAPTE (22:00 - 07:00)
+        clusters_msg = "🏆 <b>RAPORT NOAPTE (VOLUME):</b>\n"
         nightly_list = []
         for key, vol in global_state["nightly_data"].items():
             if vol > MINI:
                 nightly_list.append((key, vol))
-        
         nightly_list.sort(key=lambda x: x[1], reverse=True)
         
         if not nightly_list:
@@ -619,7 +646,8 @@ def check_nightly_summary():
                 side = key.split('|')[1]
                 clusters_msg += f"🌙 <b>{title}</b> ({side})\n   💰 Volum Noapte: ${vol:.0f}\n\n"
 
-        tg(f"☕ <b>BUNĂ DIMINEAȚA!</b> ☀️\n\n{clusters_msg}")
+        # C. SEND
+        tg(f"☕ <b>BUNĂ DIMINEAȚA!</b> ☀️\n\n{portfolio_msg}{clusters_msg}")
         
         # Reset nightly bucket
         global_state["nightly_data"] = {}
@@ -633,7 +661,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: % Exit & Entry Price\nFix: Night-Only Report") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: % Exit & Entry Price\nFix: Night-Only Report\nRule: Strict Cluster (Users > $1000)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -684,17 +712,24 @@ def bot_loop():
                     
                     if price > 0: global_state["market_prices"][market_key] = price
 
-                    # NIGHTLY ACCUMULATION (Doar intre 22 si 07)
+                    # NIGHTLY ACCUMULATION
                     now_h = datetime.now(RO).hour
                     if action == "buy" and (now_h >= 22 or now_h < 7):
                         global_state["nightly_data"][market_key] = global_state["nightly_data"].get(market_key, 0) + val
 
                     cluster_participants = set()
                     cluster_sum = 0
+                    c_valid_whales = set()
+                    c_breakdown = []
+
                     for k, v in global_state["positions"].items():
                         if market_key in k and not k.startswith(SELF): 
                             cluster_sum += v
                             cluster_participants.add(k.split("|")[0])
+                            # STRICT RULE > 1000
+                            if v >= MIN_TRADER_DISPLAY:
+                                c_valid_whales.add(k.split("|")[0])
+                                c_breakdown.append(f"• {k.split('|')[0]}: ${v:,.0f}")
                     
                     participants_count = len(cluster_participants)
                     
@@ -732,19 +767,14 @@ def bot_loop():
                                 tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 {val:.0f} @ {price*100:.1f}¢\n🎯 Scor: <b>{current_score:.1f}/10</b>")
 
                         elif action == "sell":
-                            # CALCULEAZA % SI PROFIT
                             held_val = global_state["positions"].get(pos_key, 0)
                             entry_price = global_state["trader_entries"].get(pos_key, 0)
-                            
-                            # Update holding
                             global_state["positions"][pos_key] = max(held_val - val, 0)
                             
                             if val >= MIN_SELL_ALERT:
-                                # Calculeaza % vandut
                                 total_before = held_val if held_val > val else val 
                                 pct_sold = (val / total_before) * 100 if total_before > 0 else 100
                                 if pct_sold > 100: pct_sold = 100
-                                
                                 reason = "(Profit)" if price > entry_price else "(Loss)"
                                 pp_warn = ""
                                 if is_ping_pong: pp_warn = "⚠️ <b>PING-PONG</b>"
@@ -777,20 +807,19 @@ def bot_loop():
                     if c_key in processed_clusters: continue
                     processed_clusters.add(c_key)
                     
+                    # LOGICA STRICTA DE CLUSTER: Verificam din nou aici
                     c_total = 0
-                    c_users_set = set()
-                    c_breakdown = [] 
+                    c_valid_whales_list = []
                     
                     for sub_k, sub_v in global_state["positions"].items():
                         if c_key in sub_k and not sub_k.startswith(SELF):
                             c_total += sub_v
-                            # REQ: MIN TRADER $1000
                             if sub_v >= MIN_TRADER_DISPLAY:
-                                u_name = sub_k.split("|")[0]
-                                c_users_set.add(u_name)
-                                c_breakdown.append(f"• {u_name}: ${sub_v:,.0f}")
+                                u_n = sub_k.split("|")[0]
+                                c_valid_whales_list.append(f"• {u_n}: ${sub_v:,.0f}")
                     
-                    if len(c_users_set) >= 2 and c_total >= MINI:
+                    # TRIGGER STRICT: Minim 2 cu > $1000
+                    if len(c_valid_whales_list) >= 2 and c_total >= MINI:
                         if c_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
                                 global_state["cluster_created_at"][c_key] = 0 
@@ -798,11 +827,9 @@ def bot_loop():
                             else:
                                 global_state["cluster_created_at"][c_key] = time.time()
 
-                        global_state["cluster_participants"][c_key] = list(c_users_set)
-
                         last_sent = global_state["clusters_sent"].get(c_key, 0)
                         if loop_count > 1 and c_total > last_sent * 1.2:
-                            c_list_users = list(c_users_set)
+                            c_list_users = list(c_valid_whales_list) # Doar pt scoring approx
                             sc = calc_smart_score(c_total, c_list_users, global_state["market_prices"].get(c_key, 0.5), False)
                             
                             c_side = c_key.split("|")[1]
@@ -811,7 +838,7 @@ def bot_loop():
                             if c_total >= BIG: level = "MARE"
                             elif c_total >= NORMAL: level = "MEDIU"
                             
-                            breakdown_str = "\n".join(c_breakdown)
+                            breakdown_str = "\n".join(c_valid_whales_list)
                             tg(f"📊 <b>CLUSTER {level} {c_emoji} {c_side}</b>\n🏆 {c_key.split('|')[0]}\n💰 Total: ${c_total:,.0f}\n🎯 Scor: {sc:.1f}\n\n👥 <b>Participanți (>1k):</b>\n{breakdown_str}")
                             
                             global_state["clusters_sent"][c_key] = c_total
