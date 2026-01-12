@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL FIXED"
+# 1. CONFIGURARE "HYPER-QUANT ENGINE"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -34,8 +34,6 @@ MINI = 6000
 NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
-
-# !!! FIX: Variabila definita clar aici !!!
 MIN_TRADER_DISPLAY = 1000 
 
 # Shadow
@@ -129,7 +127,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Fixed</title>
+    <title>PolyBot Hyper-Quant</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -596,13 +594,75 @@ def get_usd(e):
     try: return float(e.get("size", 0)) * float(e.get("price", 0))
     except: return 0
 
+# --- HYPER-QUANT ENGINE ---
+def get_ai_reinvestment_strategy(cash_in_hand, sold_key):
+    candidates = []
+    
+    # 1. SCANARE PIATA (Gaseste toate oportunitatile)
+    for key, score in global_state["scores"].items():
+        if key == sold_key: continue
+        
+        price = global_state["market_prices"].get(key, 0.5)
+        if price > 0.90 or price < 0.05: continue # Filtrare Junk/Expensive
+        
+        # 2. CALCUL "ALPHA SCORE" (Complexitate Quant)
+        alpha = score
+        
+        # Factor A: Whale Dominance (Sunt Euan/Car majoritari?)
+        # Simplificare: daca scorul e > 8, stim ca sunt balene
+        if score > 8.5: alpha += 1.5 
+        
+        # Factor B: Upside Potential (Pret mic = Potential mare)
+        upside = (1.00 - price) / price # ex: (1-0.3)/0.3 = 2.3x
+        if upside > 1.5: alpha += 1.0
+        elif upside < 0.2: alpha -= 2.0
+        
+        # Factor C: Exposure Check (Ai deja pozitia?)
+        owned = any(key in p['title'] for p in global_state["my_portfolio"])
+        if owned: alpha -= 3.0 # Nu dubla daca ai deja mult
+        
+        candidates.append({"key": key, "alpha": alpha, "price": price})
+    
+    # 3. SELECTIE & MONEY MANAGEMENT (Kelly Criterion)
+    if not candidates: 
+        return "\n💡 <b>SFAT:</b> 🏖️ <b>KEEP CASH</b> (Nu sunt oportunități cu Alpha mare)."
+        
+    best = max(candidates, key=lambda x: x['alpha'])
+    
+    if best['alpha'] < 7.0:
+        return "\n💡 <b>SFAT:</b> 🏖️ <b>KEEP CASH</b> (Piața e slabă)."
+        
+    # 4. ALOCARE DINAMICA
+    allocation_pct = 0.30 # Default 30%
+    strategy_name = "STANDARD"
+    
+    if best['alpha'] >= 9.5 and best['price'] < 0.60:
+        allocation_pct = 0.75 # 75%
+        strategy_name = "🚀 <b>ALL-IN AGGRESSIVE</b>"
+    elif best['alpha'] >= 8.0:
+        allocation_pct = 0.40 # 40%
+        strategy_name = "⚔️ <b>TACTICAL ENTRY</b>"
+    elif best['alpha'] >= 6.0 and best['price'] < 0.30:
+        allocation_pct = 0.15 # 15%
+        strategy_name = "🌙 <b>MOONSHOT BET</b>"
+        
+    invest_amt = cash_in_hand * allocation_pct
+    if invest_amt < 10: invest_amt = 10
+    
+    title = best['key'].split('|')[0]
+    side = best['key'].split('|')[1]
+    
+    return (f"\n💡 <b>SFAT REINVESTIRE:</b>\n"
+            f"Strategie: {strategy_name}\n"
+            f"👉 Bagă <b>${invest_amt:.0f}</b> în: {title} ({side})\n"
+            f"📊 Alpha Score: <b>{best['alpha']:.1f}</b> | Upside: {(1/best['price'])*100-100:.0f}%")
+
 # --- NIGHTLY REPORT ---
 def check_nightly_summary():
     now = datetime.now(RO)
     today_str = now.strftime("%Y-%m-%d")
     
     if now.hour == 7 and global_state["last_summary_day"] != today_str:
-        # A. ANALIZA PORTOFOLIU
         portfolio_msg = "💼 <b>ANALIZĂ PORTOFOLIU:</b>\n"
         total_val = 0
         actions_needed = False
@@ -630,7 +690,6 @@ def check_nightly_summary():
         if not actions_needed: portfolio_msg += "<i>(Nicio urgență. Portofoliu stabil.)</i>\n"
         portfolio_msg += f"\n💰 <b>Total Equity: ${total_val:.0f}</b>\n\n"
 
-        # B. RAPORT CLUSTERE NOAPTE (22:00 - 07:00)
         clusters_msg = "🏆 <b>RAPORT NOAPTE (VOLUME):</b>\n"
         nightly_list = []
         for key, vol in global_state["nightly_data"].items():
@@ -659,7 +718,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Variable Crash Fixed\nFull Mode Active") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nEngine: Hyper-Quant Active\nLogic: Alpha Score + Kelly Sizing") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -722,7 +781,6 @@ def bot_loop():
                         if market_key in k and not k.startswith(SELF): 
                             cluster_sum += v
                             cluster_participants.add(k.split("|")[0])
-                            # FIX VARIABLE NAME
                             if v >= MIN_TRADER_DISPLAY:
                                 c_breakdown.append(f"• {k.split('|')[0]}: ${v:,.0f}")
                     
@@ -750,8 +808,30 @@ def bot_loop():
                             if current_score < 4.5: feedback = "⚠️ <b>Riscant (Scor Mic)</b>"
                             if current_score > 7.5: feedback = "🏆 <b>Intrare Excelentă!</b>"
                             tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>\n{feedback}")
+                        
                         elif action == "sell":
-                            tg(f"🔔 <b>AI VÂNDUT {side_formatted}</b>\n🏆 {title}\nRecuperat: ${val:.0f}")
+                            held_val = global_state["positions"].get(pos_key, 0)
+                            entry_price = global_state["trader_entries"].get(pos_key, 0)
+                            global_state["positions"][pos_key] = max(held_val - val, 0)
+                            
+                            sell_feedback = ""
+                            if entry_price > 0:
+                                if price >= entry_price: sell_feedback = "✅ <b>PROFIT MARKED</b>"
+                                else: sell_feedback = "⚠️ <b>STOP LOSS</b>"
+                            
+                            if current_score < 4.0: sell_feedback += " (Smart Exit)"
+                            elif current_score > 8.5: sell_feedback += " (Early?)"
+
+                            # CALL HYPER-QUANT ENGINE
+                            reinvest_msg = get_ai_reinvestment_strategy(val, market_key)
+
+                            msg = f"🔔 <b>AI VÂNDUT {side_formatted}</b>\n🏆 {title}\n💵 Recuperat: ${val:.0f} @ {price*100:.1f}¢\n"
+                            if entry_price > 0:
+                                msg += f"🚪 Intrare: {entry_price*100:.1f}¢\n"
+                            msg += f"🎯 Scor Momentan: <b>{current_score:.1f}</b>\n{sell_feedback}{reinvest_msg}"
+                            
+                            tg(msg)
+                        
                         threading.Thread(target=sync_portfolio).start()
 
                     else:
@@ -808,7 +888,6 @@ def bot_loop():
                     for sub_k, sub_v in global_state["positions"].items():
                         if c_key in sub_k and not sub_k.startswith(SELF):
                             c_total += sub_v
-                            # FIX VARIABLE NAME
                             if sub_v >= MIN_TRADER_DISPLAY:
                                 c_breakdown.append(f"• {sub_k.split('|')[0]}: ${sub_v:,.0f}")
                     
