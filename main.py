@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ULTRA-SYNC"
+# 1. CONFIGURARE "GOD MODE FINAL"
 # ==========================================
 
 BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
@@ -23,7 +23,7 @@ API_CLOB = "https://clob.polymarket.com/price"
 
 POLL = 60 
 
-# Limite
+# Limite & Setari
 MIN_BUY_ALERT = 800    
 MIN_SELL_ALERT = 1000  
 MICRO_SELL_THRESHOLD_PCT = 0.80 
@@ -36,10 +36,6 @@ NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
-
-# Shadow
-SHADOW_START_CAPITAL = 2000
-BASE_BET_SIZE = 200 
 
 RO = pytz.timezone("Europe/Bucharest")
 DATA_DIR = Path("/app/data") if os.getenv("RAILWAY_ENVIRONMENT") else Path(".")
@@ -65,7 +61,7 @@ global_state = {
     "bot_start_time": time.time(),
     "last": {},           
     "positions": {},      
-    "trader_entries": {}, 
+    "trader_entries": {}, # Memorie preturi intrare
     "my_portfolio": [],   
     "trade_log": [],      
     "scores": {},         
@@ -77,12 +73,8 @@ global_state = {
     "cluster_created_at": {}, 
     "clusters_sent": {},
     "last_summary_day": "",
-    "nightly_data": {},     
-    "shadow": {
-        "cash": SHADOW_START_CAPITAL,
-        "positions": [],
-        "history": []
-    },
+    "nightly_sales": [],    # Lista curata de vanzari nocturne
+    "processed_ids": [],    # CRITIC: Anti-Spam (Deduplicare)
     "last_update": "Never"
 }
 
@@ -97,14 +89,13 @@ def sanitize_state():
         "market_prices": {},
         "positions": {},
         "trader_entries": {},
-        "nightly_data": {},
+        "nightly_sales": [],
         "last_alert_times": {},
         "micro_tracker": {},
-        "shadow": { "cash": SHADOW_START_CAPITAL, "positions": [], "history": [] }
+        "processed_ids": []
     }
     for k, v in defaults.items():
         if k not in global_state: global_state[k] = v
-    if "shadow" not in global_state: global_state["shadow"] = defaults["shadow"]
 
 def load():
     global global_state
@@ -119,6 +110,9 @@ def load():
         except: sanitize_state()
 
 def save():
+    # Mentinem lista de ID-uri procesate sub control
+    if len(global_state["processed_ids"]) > 5000:
+        global_state["processed_ids"] = global_state["processed_ids"][-5000:]
     if len(global_state["trade_log"]) > 200:
         global_state["trade_log"] = global_state["trade_log"][-200:]
     STATE_FILE.write_text(json.dumps(global_state, indent=2))
@@ -132,7 +126,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Ultra-Sync</title>
+    <title>PolyBot God Mode</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -161,11 +155,6 @@ HTML_TEMPLATE = """
         .rec-ok   { border-color: #00d2ff; }
         .rec-text { font-size: 1.1em; font-weight: 500; }
         .rec-sub  { font-size: 0.9em; color: #aaa; }
-        
-        .shadow-stats { display: flex; gap: 20px; margin-bottom: 15px; }
-        .stat-box { background: rgba(0,0,0,0.3); padding: 10px 20px; border-radius: 5px; }
-        .profit-plus { color: #00b894; }
-        .profit-minus { color: #d63031; }
     </style>
 </head>
 <body>
@@ -186,7 +175,7 @@ HTML_TEMPLATE = """
         {% else %}
             <div class="rec-box rec-ok">
                 <div class="rec-text">✅ Portofoliu Stabil</div>
-                <div class="rec-sub">Nu sunt necesare acțiuni urgente. Scanez pentru intrări...</div>
+                <div class="rec-sub">Nu sunt necesare acțiuni urgente.</div>
             </div>
         {% endif %}
     </div>
@@ -212,35 +201,8 @@ HTML_TEMPLATE = """
         </table>
     </div>
 
-    <div class="card" style="border: 1px solid #6c5ce7;">
-        <h3 style="margin-top:0; color:#a29bfe;">🧪 Shadow Trading (Smart Money Management)</h3>
-        <div class="shadow-stats">
-            <div class="stat-box">Cash: <b>${{ shadow_cash }}</b></div>
-            <div class="stat-box">Valoare Poziții: <b>${{ shadow_holdings }}</b></div>
-            <div class="stat-box">Total Equity: <b>${{ shadow_total }}</b></div>
-            <div class="stat-box">Profit: <b class="{{ 'profit-plus' if shadow_pl >= 0 else 'profit-minus' }}">{{ shadow_pl_fmt }}</b></div>
-        </div>
-        <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Bet Size</th><th>Intrare</th><th>Valoare Acum</th><th>ROI</th></tr></thead>
-            <tbody>
-                {% for s in shadow_display %}
-                <tr>
-                    <td>{{ s.title }}</td>
-                    <td><span class="{{ 'yes' if 'YES' in s.side else 'no' }}">{{ s.side }}</span></td>
-                    <td>${{ s.entry_val }}</td> 
-                    <td>{{ s.entry_price }}¢</td>
-                    <td><b>${{ s.curr_val }}</b></td>
-                    <td class="{{ 'profit-plus' if s.roi >= 0 else 'profit-minus' }}">{{ s.roi }}%</td>
-                </tr>
-                {% else %}
-                <tr><td colspan="6" style="text-align:center; color:#666;">Aștept semnal "High Conviction" (Scor > 8.0)...</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
     <div class="card">
-        <h3>🔥 Active New Clusters (Apărute ACUM > ${{ mini }})</h3>
+        <h3>🔥 Clustere Active (> ${{ mini }})</h3>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Traderi & Investiții</th><th>Total ($)</th><th>Preț</th><th>Scor</th></tr></thead>
             <tbody>
@@ -257,30 +219,7 @@ HTML_TEMPLATE = """
                     <td>{{ c.score_html|safe }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster <b>NOU</b>.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h3>💰 Top Investiții Comune (All Time)</h3>
-        <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total ($)</th><th>Preț</th></tr></thead>
-            <tbody>
-                {% for c in all_shared %}
-                <tr>
-                    <td>{{ c.key.split('|')[0] }}</td>
-                    <td><span class="{{ 'yes' if 'YES' in c.key else 'no' }}">{{ c.key.split('|')[1] }}</span></td>
-                    <td>
-                        👥 {{ c.count }}<br>
-                        <span class="details">{{ c.breakdown }}</span>
-                    </td>
-                    <td><b>${{ c.vol_fmt }}</b></td>
-                    <td>{{ c.price }}¢</td>
-                </tr>
-                {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Scanning...</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:#666;">Niciun cluster <b>ACTIV</b>.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -346,11 +285,17 @@ def index():
         cluster_active = len(users) >= 2
         current_score = calc_smart_score(users, p_val, False, cluster_active)
 
-        # REQ: TAKE PROFIT LOGIC FIXED
+        # LOGIC CHECK TAKE PROFIT
         if p_val >= 0.98:
             recs.append({"class": "rec-sell", "text": f"💰 <b>TAKE ALL PROFIT: {pos['title']}</b>", "reason": f"Preț {p_val*100:.0f}¢. E aproape de 100%."})
-        elif p_val >= 0.94 and (entry_val > 0 and p_val > entry_val): 
-            recs.append({"class": "rec-sell", "text": f"📉 <b>REDU POZIȚIA: {pos['title']}</b>", "reason": f"Profit marcat ({p_val*100:.0f}¢ > {entry_val*100:.0f}¢)."})
+        elif p_val >= 0.94:
+            if entry_val > 0:
+                if p_val > entry_val * 1.05: # Micar 5% profit
+                    recs.append({"class": "rec-sell", "text": f"📉 <b>REDU POZIȚIA: {pos['title']}</b>", "reason": f"Profit marcat ({p_val*100:.0f}¢ > {entry_val*100:.0f}¢)."})
+                else:
+                    recs.append({"class": "rec-ok", "text": f"✊ <b>HOLD: {pos['title']}</b>", "reason": f"Ești la 94¢ dar intrarea a fost {entry_val*100:.0f}¢."})
+            else:
+                recs.append({"class": "rec-sell", "text": f"📉 <b>REDU POZIȚIA: {pos['title']}</b>", "reason": "Preț mare 94¢."})
         elif current_score >= 8.5 and p_val < 0.85:
             recs.append({"class": "rec-add", "text": f"➕ <b>ADAUGĂ: {pos['title']}</b>", "reason": f"Scor Excelent {current_score:.1f}."})
         elif current_score < 4.0:
@@ -372,7 +317,6 @@ def index():
     for key in unique_markets:
         vol, users, parts = get_cluster_data_raw(key)
         p_live = global_state['market_prices'].get(key, 0.5)
-        created_at = global_state["cluster_created_at"].get(key, 0)
         
         score = calc_smart_score(users, p_live, False, len(users) >= 2)
         global_state["scores"][key] = score
@@ -395,55 +339,17 @@ def index():
             }
             all_shared.append(cluster_obj)
             is_new = False
-            if created_at > global_state["bot_start_time"]: is_new = True
-            if vol >= MINI and is_new: smart_clusters.append(cluster_obj)
-            
-            if key not in my_owned_markets and score >= 8.0 and vol >= MINI:
-                potential_buys.append((key, score))
-                if score > best_opp_score:
-                    best_opp_score = score
-                    best_opp_key = key
+            if vol >= MINI: smart_clusters.append(cluster_obj)
 
     smart_clusters.sort(key=lambda x: x["vol"], reverse=True)
     all_shared.sort(key=lambda x: x["vol"], reverse=True)
-
-    potential_buys.sort(key=lambda x: x[1], reverse=True)
-    for opp_key, opp_score in potential_buys[:3]:
-        recs.append({"class": "rec-buy", "text": f"🚀 <b>OPORTUNITATE: {opp_key.split('|')[0]}</b>", "reason": f"Scor {opp_score:.1f}. Cluster puternic."})
-    
-    if my_weakest_market and best_opp_key:
-        if my_weakest_score < 5.0 and best_opp_score > 7.5:
-            recs.append({"class": "rec-swap", "text": f"🔄 <b>SWAP: {my_weakest_market} ➔ {best_opp_key.split('|')[0]}</b>", "reason": "Upgrade Scor."})
-
-    shadow_display = []
-    shadow_holdings_val = 0
-    for p in global_state["shadow"]["positions"]:
-        curr_price = global_state["market_prices"].get(p["key"], p["entry_price"])
-        curr_val = p["shares"] * curr_price
-        shadow_holdings_val += curr_val
-        roi = ((curr_val - p["cost"]) / p["cost"]) * 100
-        title = p["key"].split("|")[0]
-        side = p["key"].split("|")[1]
-        shadow_display.append({
-            "title": title, "side": side,
-            "entry_val": f"{p['cost']:.0f}", "entry_price": f"{p['entry_price']*100:.1f}",
-            "curr_val": f"{curr_val:.0f}", "curr_price": f"{curr_price*100:.1f}",
-            "roi": round(roi, 1)
-        })
-    shadow_cash = global_state["shadow"]["cash"]
-    shadow_total = shadow_cash + shadow_holdings_val
-    shadow_pl = shadow_total - SHADOW_START_CAPITAL
-    shadow_pl_fmt = f"${shadow_pl:.0f}" if shadow_pl >= 0 else f"-${abs(shadow_pl):.0f}"
 
     return render_template_string(
         HTML_TEMPLATE, 
         state=global_state, self_name=SELF, recommendations=recs, 
         min_dash=MIN_DASHBOARD_LOG, mini=MINI, 
         smart_clusters=smart_clusters[:MAX_DASHBOARD_CLUSTERS],
-        all_shared=all_shared[:20],
-        shadow_display=shadow_display, shadow_cash=f"{shadow_cash:.0f}",
-        shadow_holdings=f"{shadow_holdings_val:.0f}", shadow_total=f"{shadow_total:.0f}",
-        shadow_pl=shadow_pl, shadow_pl_fmt=shadow_pl_fmt
+        all_shared=all_shared[:20]
     )
 
 # ==========================================
@@ -489,43 +395,6 @@ def calc_smart_score(participants_list, price, is_ping_pong, cluster_active):
     if is_ping_pong: score -= 5.0
     return max(0.0, min(10.0, score))
 
-def calculate_bet_size(score, price):
-    bet = BASE_BET_SIZE
-    if score >= 9.0: bet *= 2.0
-    elif score >= 8.0: bet *= 1.5
-    elif score < 6.0: bet *= 0.5
-    if price > 0.90: bet *= 0.5
-    return int(bet)
-
-def update_shadow_portfolio():
-    shadow = global_state["shadow"]
-    active_keys = []
-    for p in shadow["positions"]:
-        market_key = p["key"]
-        curr_price = global_state["market_prices"].get(market_key, p["entry_price"])
-        score = global_state["scores"].get(market_key, 5.0)
-        if curr_price >= 0.95 or score < 4.0:
-            sale_val = p["shares"] * curr_price
-            shadow["cash"] += sale_val
-            print(f"🤖 SHADOW SOLD: {market_key}")
-        else:
-            active_keys.append(p)
-    shadow["positions"] = active_keys 
-
-    for key, score in global_state["scores"].items():
-        owned = any(p["key"] == key for p in shadow["positions"])
-        if not owned and score >= 8.0:
-            price = global_state["market_prices"].get(key, 0)
-            if 0.05 < price < 0.88:
-                bet_size = calculate_bet_size(score, price)
-                if shadow["cash"] >= bet_size:
-                    shares = bet_size / price
-                    shadow["positions"].append({
-                        "key": key, "shares": shares, "cost": bet_size, "entry_price": price
-                    })
-                    shadow["cash"] -= bet_size
-                    print(f"🤖 SHADOW BOUGHT: {key}")
-
 def sync_trader_positions():
     print("♻️ Sincronizare Traderi...")
     full_list = {**TRADERS, SELF: {"addr": SELF_ADDR}}
@@ -548,6 +417,7 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
+                    # FORCE SYNC ENTRY
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: global_state["trader_entries"][pos_key] = entry
         except: pass
@@ -629,38 +499,59 @@ def get_ai_reinvestment_strategy(cash_in_hand, sold_key):
     side = best['key'].split('|')[1]
     return (f"\n💡 <b>SFAT REINVESTIRE:</b>\nStrategie: {strategy_name}\n👉 Bagă <b>${invest_amt:.0f}</b> în: {title} ({side})\n📊 Alpha Score: <b>{best['alpha']:.1f}</b>")
 
-# --- NIGHTLY NET FLOW UPGRADE ---
+# --- NIGHTLY REPORT REPARAT ---
 def check_nightly_summary():
     now = datetime.now(RO)
     today_str = now.strftime("%Y-%m-%d")
+    
     if now.hour == 7 and global_state["last_summary_day"] != today_str:
+        # A. ANALIZA PORTOFOLIU (CU SFATURI)
         portfolio_msg = "💼 <b>ANALIZĂ PORTOFOLIU:</b>\n"
-        sync_portfolio()
+        sync_portfolio() 
         for pos in global_state["my_portfolio"]:
-            portfolio_msg += f"• {pos['title']}\n" # Simplified for brevity in this block
-        
-        clusters_msg = "🏆 <b>RAPORT NOAPTE (NET FLOW):</b>\n"
-        nightly_list = []
-        for key, data in global_state["nightly_data"].items():
-            if abs(data['net_vol']) > 100:
-                nightly_list.append((key, data['net_vol'], data['users']))
-        nightly_list.sort(key=lambda x: abs(x[1]), reverse=True)
-        
-        if not nightly_list: clusters_msg += "<i>(Liniște totală...)</i>"
-        else:
-            for key, net_vol, users in nightly_list[:5]:
-                title = key.split('|')[0]
-                side = key.split('|')[1]
-                sign = "+" if net_vol > 0 else ""
-                part_str = ""
-                for u_name, u_data in users.items():
-                    if abs(u_data['vol']) > 500:
-                        p_entry = f"(@ {u_data['entry']*100:.1f}¢)" if u_data['entry'] > 0 else ""
-                        part_str += f"\n   • {u_name}: {sign}${u_data['vol']:.0f} {p_entry}"
-                clusters_msg += f"🌙 <b>{title}</b> ({side})\n   💰 Net: <b>{sign}${net_vol:.0f}</b>{part_str}\n\n"
+            try: p_val = float(pos['price'].replace('¢', '').split()[0]) / 100.0
+            except: p_val = 0.0
+            try: entry_val = float(pos['entry_fmt'].replace('¢', '').split()[0]) / 100.0
+            except: entry_val = 0.0
+            
+            sfat = "HOLD"
+            if p_val > 0.95: sfat = "TAKE PROFIT (High)"
+            elif entry_val > 0 and p_val < entry_val * 0.8: sfat = "CUT LOSS (-20%)"
+            elif entry_val > 0 and p_val > entry_val * 1.1: sfat = "PROFIT (Secure?)"
+            
+            portfolio_msg += f"• {pos['title']}\n   👉 {sfat} ({pos['price']})\n"
 
-        tg(f"☕ <b>BUNĂ DIMINEAȚA!</b> ☀️\n\n{portfolio_msg}{clusters_msg}")
-        global_state["nightly_data"] = {}
+        # B. LISTA SIMPLA CLUSTERE ACTIVE
+        clusters_msg = "\n🔥 <b>CLUSTERE ACTIVE (Supraviețuitori):</b>\n"
+        unique_keys = set()
+        for pos_k in global_state["positions"]:
+            parts = pos_k.split("|")
+            if len(parts) == 3 and parts[0] != SELF:
+                unique_keys.add(f"{parts[1]}|{parts[2]}")
+        
+        has_clusters = False
+        for key in unique_keys:
+            c_sum = 0
+            for pos_k, val in global_state["positions"].items():
+                if key in pos_k and not pos_k.startswith(SELF): c_sum += val
+            
+            if c_sum >= MINI: 
+                has_clusters = True
+                clusters_msg += f"• {key.split('|')[0]} ({key.split('|')[1]}): ${c_sum:,.0f}\n"
+        
+        if not has_clusters: clusters_msg += "<i>(Niciun cluster mare activ.)</i>\n"
+
+        # C. WHALE SALES (>5K) - Lista Nominala
+        sales_msg = "\n🐋 <b>VÂNZĂRI MASIVE NOAPTEA (> $5k):</b>\n"
+        if not global_state["nightly_sales"]:
+            sales_msg += "<i>(Nimic notabil.)</i>"
+        else:
+            for item in global_state["nightly_sales"]:
+                sales_msg += f"• {item['trader']} a vândut {item['market']} (${item['amount']:,.0f})\n"
+
+        tg(f"☕ <b>RAPORT DIMINEAȚA</b> ☀️\n\n{portfolio_msg}{clusters_msg}{sales_msg}")
+        
+        global_state["nightly_sales"] = []
         global_state["last_summary_day"] = today_str
         save()
 
@@ -671,7 +562,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nMode: ULTRA-SYNC (Instant Memory)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: 2800 Spam Messages (Dedup)\nFix: 100% Sold Math\nFix: Night Report") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -681,9 +572,6 @@ def bot_loop():
     while True:
         try:
             loop_count += 1
-            if loop_count % 5 == 0: 
-                sync_portfolio()
-                update_shadow_portfolio()
             if loop_count % 10 == 0: sync_trader_positions()
 
             check_nightly_summary()
@@ -706,6 +594,11 @@ def bot_loop():
                     if ts <= last_ts: continue
                     if ts > new_max_ts: new_max_ts = ts
 
+                    # ANTI-SPAM CRITIC: DEDUPLICARE ID
+                    unique_id = e.get("id") or f"{e.get('transactionHash')}_{e.get('logIndex')}"
+                    if unique_id in global_state["processed_ids"]: continue
+                    global_state["processed_ids"].append(unique_id)
+
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
                     if e.get("type") == "MERGE": continue 
@@ -723,15 +616,7 @@ def bot_loop():
                     if price > 0: global_state["market_prices"][market_key] = price
 
                     now_h = datetime.now(RO).hour
-                    if now_h >= 22 or now_h < 7:
-                        if market_key not in global_state["nightly_data"]:
-                            global_state["nightly_data"][market_key] = {'net_vol': 0, 'users': {}}
-                        flow = val if action == "buy" else -val
-                        global_state["nightly_data"][market_key]['net_vol'] += flow
-                        if name not in global_state["nightly_data"][market_key]['users']:
-                            global_state["nightly_data"][market_key]['users'][name] = {'vol': 0, 'entry': 0}
-                        global_state["nightly_data"][market_key]['users'][name]['vol'] += flow
-                        if action == "buy": global_state["nightly_data"][market_key]['users'][name]['entry'] = price
+                    is_night = (now_h >= 22 or now_h < 7)
 
                     cluster_users_sum = {}
                     cluster_users_entry = {}
@@ -770,32 +655,19 @@ def bot_loop():
                     
                     if name == SELF:
                         if action == "buy":
-                            feedback = "✅ <b>Decizie Bună!</b>"
-                            if current_score < 4.5: feedback = "⚠️ <b>Riscant (Scor Mic)</b>"
-                            if current_score > 7.5: feedback = "🏆 <b>Intrare Excelentă!</b>"
-                            tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>\n{feedback}")
+                            tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>")
                         elif action == "sell":
                             entry_price = global_state["trader_entries"].get(pos_key, 0)
-                            sell_feedback = ""
-                            if entry_price > 0:
-                                if price >= entry_price: sell_feedback = "✅ <b>PROFIT MARKED</b>"
-                                else: sell_feedback = "⚠️ <b>STOP LOSS</b>"
                             reinvest_msg = get_ai_reinvestment_strategy(val, market_key)
                             msg = f"🔔 <b>AI VÂNDUT {side_formatted}</b>\n🏆 {title}\n💵 Recuperat: ${val:.0f} @ {price*100:.1f}¢\n"
-                            if entry_price > 0: msg += f"🚪 Intrare: {entry_price*100:.1f}¢\n"
-                            msg += f"🎯 Scor Momentan: <b>{current_score:.1f}</b>\n{sell_feedback}{reinvest_msg}"
+                            if entry_price > 0: msg += f"🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢\n"
+                            msg += f"{reinvest_msg}"
                             tg(msg)
                         threading.Thread(target=sync_portfolio).start()
 
                     else:
-                        should_alert = True
-                        now_ts = time.time()
-                        last_alert = global_state["last_alert_times"].get(pos_key, 0)
-                        if (now_ts - last_alert) < 60: should_alert = False
-                        
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
-                            # FIX 1: INSTANT MEMORY FOR ENTRY PRICE
                             global_state["trader_entries"][pos_key] = price 
                             
                             if val >= MIN_BUY_ALERT:
@@ -811,6 +683,12 @@ def bot_loop():
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
                             entry_price = global_state["trader_entries"].get(pos_key, 0)
+                            
+                            # 1. FIX MATH % SOLD
+                            total_stack = held_val if held_val > 0 else val
+                            pct_sold = (val / total_stack) * 100
+                            if pct_sold > 100: pct_sold = 100
+                            
                             global_state["positions"][pos_key] = max(held_val - val, 0)
                             
                             track = global_state["micro_tracker"].get(pos_key)
@@ -820,23 +698,18 @@ def bot_loop():
                                     tg(f"⚠️ <b>SNEAKY EXIT</b>: {name} a vândut >80% din {title} prin tranzacții mici.")
                                     del global_state["micro_tracker"][pos_key]
 
-                            if val >= MIN_SELL_ALERT and should_alert:
-                                total_before = held_val if held_val > val else val 
-                                pct_sold = (val / total_before) * 100 if total_before > 0 else 100
-                                if pct_sold > 100: pct_sold = 100
-                                
-                                pp_warn = ""
-                                if is_ping_pong:
-                                    pp_warn = "⚡ <b>PING-PONG</b>"
-                                    # FIX 2: FORCE DISPLAY ENTRY FOR PING PONG
-                                    if entry_price > 0: pp_warn += f"\nIntrat {entry_price*100:.1f}¢ ➔ Ieșit {price*100:.1f}¢"
-                                elif val >= WHALE_ALERT: pp_warn = "🐋 <b>WHALE DUMP!</b>"
-                                
+                            if is_night and val >= 5000:
+                                global_state["nightly_sales"].append({
+                                    "trader": name, "market": f"{title} ({outcome})", "amount": val
+                                })
+
+                            if val >= MIN_SELL_ALERT:
+                                pp_warn = "⚡ <b>PING-PONG</b>" if is_ping_pong else ""
                                 exit_str = f"📉 Vândut: <b>{pct_sold:.0f}%</b>"
-                                if entry_price > 0: exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
+                                if entry_price > 0: 
+                                    exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}")
-                                global_state["last_alert_times"][pos_key] = now_ts
 
                     if c_valid_count >= 2 and c_total >= MINI:
                         if c_key not in global_state["cluster_created_at"]:
