@@ -12,7 +12,7 @@ from flask import Flask, render_template_string
 # 1. CONFIGURARE "PLATINUM FIX"
 # ==========================================
 
-BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
+BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
 CHAT_ID = "6854863928"
 
 PORT = int(os.getenv("PORT", 5000))
