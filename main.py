@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "DOUBLE-CHECK PRO"
+# 1. CONFIGURARE "DASHBOARD FIX"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -28,7 +28,7 @@ MIN_BUY_ALERT = 1500
 MIN_SELL_ALERT = 1500  
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
-MIN_DASHBOARD_LOG = 500 
+MIN_DASHBOARD_LOG = 500  # Asta ramane 500 pentru istoric site
 
 # Clustere
 MINI = 6000      
@@ -36,9 +36,6 @@ NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
-
-# Regula 9: Limita 3 Zile
-ACCUMULATION_LIMIT_3DAYS = 15000
 
 RO = pytz.timezone("Europe/Bucharest")
 DATA_DIR = Path("/app/data") if os.getenv("RAILWAY_ENVIRONMENT") else Path(".")
@@ -139,7 +136,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Double-Check</title>
+    <title>PolyBot Dashboard</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -582,7 +579,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Double-Check Pro (Dashboard Sync + Entry Prices)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Dashboard History ($500)\nFix: Variable Scope Error") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -637,6 +634,12 @@ def bot_loop():
 
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
+
+                    # DEFINE HOLDING WARNING GLOBALLY FOR THIS EVENT
+                    holding_warning = ""
+                    for my_p in global_state["my_portfolio"]:
+                        if my_p['title'] == title:
+                            holding_warning = " | ⚠️ DEȚII ASTA!"
 
                     if action == "buy":
                         global_state["session_accumulated"][pos_key] = global_state["session_accumulated"].get(pos_key, 0) + val
@@ -693,14 +696,6 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
                     
-                    # DETERMINA HOLDING WARNING GLOBAL INAINTE DE ORICE
-                    holding_warning_text = ""
-                    is_holding_flag = False
-                    for my_p in global_state["my_portfolio"]:
-                        if my_p['title'] == title:
-                            holding_warning_text = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
-                            is_holding_flag = True
-
                     # --- ACTION LOGIC ---
                     if name == SELF:
                         if action == "buy":
@@ -723,7 +718,7 @@ def bot_loop():
 
                             if val >= MIN_BUY_ALERT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning_text}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning}")
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -754,7 +749,7 @@ def bot_loop():
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 
-                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning_text}")
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
 
                     if c_valid_count >= 2 and c_total >= MINI:
                         if c_key not in global_state["cluster_created_at"]:
@@ -778,7 +773,7 @@ def bot_loop():
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
-                        if is_holding_flag: note += " | ⚠️ DEȚII ASTA!"
+                        note += holding_warning # ADD WARNING TO DASHBOARD
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
