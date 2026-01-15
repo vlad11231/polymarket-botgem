@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "DASHBOARD FIX"
+# 1. CONFIGURARE "ZERO ERRORS"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -28,7 +28,7 @@ MIN_BUY_ALERT = 1500
 MIN_SELL_ALERT = 1500  
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
-MIN_DASHBOARD_LOG = 500  # Asta ramane 500 pentru istoric site
+MIN_DASHBOARD_LOG = 500 
 
 # Clustere
 MINI = 6000      
@@ -36,6 +36,9 @@ NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
+
+# !!! FIX EROARE 1: DEFINIRE VARIABILA !!!
+ACCUMULATION_LIMIT_3DAYS = 15000
 
 RO = pytz.timezone("Europe/Bucharest")
 DATA_DIR = Path("/app/data") if os.getenv("RAILWAY_ENVIRONMENT") else Path(".")
@@ -75,13 +78,15 @@ global_state = {
     "nightly_sales": [],    
     "session_accumulated": {}, 
     "buy_history": [],         
-    "last_accum_alert": {},    
+    "last_accum_alert": {},
+    "micro_tracker": {}, # !!! FIX EROARE 2: INITIALIZARE !!!
     "last_update": "Never"
 }
 
 price_cache = {} 
 
 def sanitize_state():
+    # Asiguram ca toate cheile noi exista, chiar daca incarcam un fisier vechi
     defaults = {
         "clusters_sent": {},
         "cluster_created_at": {},
@@ -94,10 +99,13 @@ def sanitize_state():
         "processed_ids": [],
         "session_accumulated": {},
         "buy_history": [],
-        "last_accum_alert": {}
+        "last_accum_alert": {},
+        "micro_tracker": {}, # CRITIC
+        "trade_log": []
     }
     for k, v in defaults.items():
         if k not in global_state: global_state[k] = v
+    
     if "shadow" in global_state: del global_state["shadow"]
 
 def load():
@@ -110,7 +118,7 @@ def load():
             global_state.update(saved)
             global_state["bot_start_time"] = current_start 
             global_state["session_accumulated"] = {}       
-            sanitize_state()
+            sanitize_state() # Aici se repara cheile lipsa
         except: sanitize_state()
 
 def save():
@@ -136,7 +144,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Dashboard</title>
+    <title>PolyBot Zero Errors</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -579,7 +587,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Dashboard History ($500)\nFix: Variable Scope Error") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: No Errors\nLimits: 1500 Alert | 500 Log") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -634,12 +642,6 @@ def bot_loop():
 
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
-
-                    # DEFINE HOLDING WARNING GLOBALLY FOR THIS EVENT
-                    holding_warning = ""
-                    for my_p in global_state["my_portfolio"]:
-                        if my_p['title'] == title:
-                            holding_warning = " | ⚠️ DEȚII ASTA!"
 
                     if action == "buy":
                         global_state["session_accumulated"][pos_key] = global_state["session_accumulated"].get(pos_key, 0) + val
@@ -696,7 +698,14 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
                     
-                    # --- ACTION LOGIC ---
+                    # HOLDING WARNING DEFINED GLOBALLY
+                    holding_warning = ""
+                    is_holding = False
+                    for my_p in global_state["my_portfolio"]:
+                        if my_p['title'] == title:
+                            holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
+                            is_holding = True
+
                     if name == SELF:
                         if action == "buy":
                             tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>")
@@ -773,7 +782,7 @@ def bot_loop():
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
-                        note += holding_warning # ADD WARNING TO DASHBOARD
+                        if is_holding: note += " | ⚠️ YOUR HOLDING" # FIXED: Add to dashboard
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
