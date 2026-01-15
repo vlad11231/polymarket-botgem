@@ -9,11 +9,11 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "GOD MODE FINAL v2"
+# 1. CONFIGURARE "TOTAL HOLDING"
 # ==========================================
 
-# TOKEN ACTUALIZAT
-BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
+# TOKEN
+BOT_TOKEN = "8408560792:AAEEaQNwcMtUM3NhG6muehfax6G-PkE0FL8" 
 CHAT_ID = "6854863928"
 
 PORT = int(os.getenv("PORT", 5000))
@@ -24,9 +24,9 @@ API_CLOB = "https://clob.polymarket.com/price"
 
 POLL = 60 
 
-# Limite & Setari
-MIN_BUY_ALERT = 800    
-MIN_SELL_ALERT = 1000  
+# Limite & Setari (CALIBRAT LA $1500)
+MIN_BUY_ALERT = 1500    
+MIN_SELL_ALERT = 1500  
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
@@ -36,7 +36,7 @@ MINI = 6000
 NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
-MIN_TRADER_DISPLAY = 1000 
+MIN_TRADER_DISPLAY = 1500 # Doar traderii > 1500 apar in liste
 
 # Regula 9: Limita 3 Zile
 ACCUMULATION_LIMIT_3DAYS = 15000
@@ -78,10 +78,10 @@ global_state = {
     "last_summary_day": "",
     "nightly_sales": [],    
     
-    # NEW: Pentru Dashboard Session & Regula 3 Zile
-    "session_accumulated": {}, # Ce s-a adunat de la restart
-    "buy_history": [],         # Istoric tranzactii cu timestamp pt regula 3 zile
-    "last_accum_alert": {},    # Sa nu spameze alerta de 15k
+    # Session & 3-Day Rule
+    "session_accumulated": {}, 
+    "buy_history": [],         
+    "last_accum_alert": {},    
     
     "last_update": "Never"
 }
@@ -115,23 +115,22 @@ def load():
             saved = json.loads(STATE_FILE.read_text())
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
-            global_state["bot_start_time"] = current_start # Restartam mereu timpul sesiunii
-            global_state["session_accumulated"] = {}       # Resetam sesiunea la restart (CUM AI CERUT)
+            global_state["bot_start_time"] = current_start 
+            global_state["session_accumulated"] = {}       
             sanitize_state()
         except: sanitize_state()
 
 def save():
-    # Limitam listele
     if len(global_state["processed_ids"]) > 5000:
         global_state["processed_ids"] = global_state["processed_ids"][-5000:]
     if len(global_state["trade_log"]) > 200:
         global_state["trade_log"] = global_state["trade_log"][-200:]
     
-    # Curatam istoricul de buy mai vechi de 4 zile
+    # Clean history > 4 days
     now_ts = time.time()
     global_state["buy_history"] = [
         b for b in global_state["buy_history"] 
-        if now_ts - b["ts"] < 345600 # 4 zile
+        if now_ts - b["ts"] < 345600 
     ]
     
     STATE_FILE.write_text(json.dumps(global_state, indent=2))
@@ -145,7 +144,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot God Mode v2</title>
+    <title>PolyBot 1500</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -222,7 +221,6 @@ HTML_TEMPLATE = """
 
     <div class="card" style="border: 1px solid #fdcb6e;">
         <h3>⚡ Active Session Clusters (De la ultimul Restart)</h3>
-        <p style="font-size:0.8em; color:#aaa;">* Arată doar banii introduși în această sesiune.</p>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Traderi (Sesiune)</th><th>Total Sesiune ($)</th><th>Preț</th></tr></thead>
             <tbody>
@@ -246,7 +244,6 @@ HTML_TEMPLATE = """
 
     <div class="card">
         <h3>💰 All-Time Clusters (Total Dețineri)</h3>
-        <p style="font-size:0.8em; color:#aaa;">* Arată suma totală a portofoliilor (Vechi + Noi).</p>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total All-Time ($)</th><th>Preț</th></tr></thead>
             <tbody>
@@ -327,15 +324,12 @@ def index():
         return total, valid
 
     recs = []
-    # 1. ANALIZA PORTOFOLIU (REPARAT)
+    # 1. ANALIZA PORTOFOLIU
     for pos in global_state["my_portfolio"]:
         try: p_val = float(pos['price'].replace('¢', '').split()[0]) / 100.0
         except: p_val = 0.0
         try: entry_val = float(pos['entry_fmt'].replace('¢', '').split()[0]) / 100.0
         except: entry_val = 0.0
-        
-        # Scor pt recomandare
-        # ... (calcul scor simplificat pt viteza)
         
         if p_val >= 0.98:
             recs.append({"class": "rec-sell", "text": f"💰 <b>TAKE ALL PROFIT: {pos['title']}</b>", "reason": f"Preț {p_val*100:.0f}¢."})
@@ -544,11 +538,13 @@ def get_ai_reinvestment_strategy(cash_in_hand, sold_key):
     side = best['key'].split('|')[1]
     return (f"\n💡 <b>SFAT REINVESTIRE:</b>\nStrategie: {strategy_name}\n👉 Bagă <b>${invest_amt:.0f}</b> în: {title} ({side})\n📊 Alpha Score: <b>{best['alpha']:.1f}</b>")
 
-# --- NIGHTLY REPORT ---
+# --- NIGHTLY REPORT REPARAT ---
 def check_nightly_summary():
     now = datetime.now(RO)
     today_str = now.strftime("%Y-%m-%d")
+    
     if now.hour == 7 and global_state["last_summary_day"] != today_str:
+        # A. ANALIZA PORTOFOLIU
         portfolio_msg = "💼 <b>ANALIZĂ PORTOFOLIU (07:00):</b>\n"
         sync_portfolio() 
         for pos in global_state["my_portfolio"]:
@@ -556,17 +552,38 @@ def check_nightly_summary():
             except: p_val = 0.0
             try: entry_val = float(pos['entry_fmt'].replace('¢', '').split()[0]) / 100.0
             except: entry_val = 0.0
+            
             sfat = "HOLD"
             if p_val > 0.95: sfat = "TAKE PROFIT (High)"
             elif entry_val > 0 and p_val < entry_val * 0.8: sfat = "CUT LOSS (-20%)"
             elif entry_val > 0 and p_val > entry_val * 1.1: sfat = "PROFIT (Secure?)"
+            
             portfolio_msg += f"• {pos['title']}\n   👉 {sfat} ({pos['price']})\n"
 
+        # B. CLUSTERE ACTIVE (Supravietuitori)
         clusters_msg = "\n🔥 <b>CLUSTERE SUPRAVIEȚUITOARE (Active la 7AM):</b>\n"
-        # (Cod afisare clustere activie...)
-        # ...
+        active_clusters = []
+        unique_keys = set()
+        for pos_k in global_state["positions"]:
+            parts = pos_k.split("|")
+            if len(parts) == 3 and parts[0] != SELF:
+                unique_keys.add(f"{parts[1]}|{parts[2]}")
         
-        # C. WHALE SALES (>5K)
+        for key in unique_keys:
+            c_sum = 0
+            for pos_k, val in global_state["positions"].items():
+                if key in pos_k and not pos_k.startswith(SELF): c_sum += val
+            
+            if c_sum >= MINI:
+                active_clusters.append((key, c_sum))
+        
+        if not active_clusters:
+            clusters_msg += "<i>(Toate clusterele de noapte s-au dizolvat.)</i>\n"
+        else:
+            for k, v in active_clusters:
+                clusters_msg += f"• {k.split('|')[0]} ({k.split('|')[1]}): ${v:,.0f}\n"
+
+        # C. WHALE SALES (>5K) - Lista Nominala
         sales_msg = "\n🐋 <b>VÂNZĂRI MASIVE NOAPTEA (> $5k):</b>\n"
         if not global_state["nightly_sales"]:
             sales_msg += "<i>(Nimic notabil.)</i>"
@@ -575,6 +592,7 @@ def check_nightly_summary():
                 sales_msg += f"• {item['trader']} a vândut {item['market']} (${item['amount']:,.0f})\n"
 
         tg(f"☕ <b>RAPORT DIMINEAȚA</b> ☀️\n\n{portfolio_msg}{clusters_msg}{sales_msg}")
+        
         global_state["nightly_sales"] = []
         global_state["last_summary_day"] = today_str
         save()
@@ -586,7 +604,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nMode: GOD MODE FINAL v2 (New Token, Split Dashboard, 3-Day Rule)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFilters: $1500 (Buy/Sell/List)\nFeature: Total Holding at Buy") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -648,19 +666,15 @@ def bot_loop():
                     
                     # LOGICA 3 ZILE ACCUMULATION
                     if action == "buy":
-                        # 1. Adaugam la istoric
                         global_state["buy_history"].append({
                             "user": name, "market": market_key, "amount": val, "ts": time.time()
                         })
-                        # 2. Verificam suma pe ultimele 3 zile
                         cutoff = time.time() - (3 * 24 * 3600)
                         recent_buys = [
                             b["amount"] for b in global_state["buy_history"]
                             if b["user"] == name and b["market"] == market_key and b["ts"] > cutoff
                         ]
                         total_3d = sum(recent_buys)
-                        
-                        # Trigger Alert (o singura data la un interval rezonabil)
                         alert_key = f"{name}|{market_key}|3d"
                         last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
                         
@@ -721,10 +735,19 @@ def bot_loop():
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
-                            
+
+                            # 2. FEATURE NOU: TOTAL HOLDING LA BUY
+                            current_holding = global_state["positions"][pos_key]
+
                             if val >= MIN_BUY_ALERT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 {val:.0f} @ {price*100:.1f}¢\n🎯 Scor: <b>{current_score:.1f}/10</b>")
+                                # REQ 4: ATENTIE DACA DETII SI TU
+                                holding_warning = ""
+                                for my_p in global_state["my_portfolio"]:
+                                    if my_p['title'] == title:
+                                        holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
+
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning}")
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -737,13 +760,6 @@ def bot_loop():
                             
                             global_state["positions"][pos_key] = max(held_val - val, 0)
                             
-                            track = global_state["micro_tracker"].get(pos_key)
-                            if track:
-                                track['sold'] += val
-                                if track['initial'] > 0 and (track['sold'] / track['initial']) >= MICRO_SELL_THRESHOLD_PCT:
-                                    tg(f"⚠️ <b>SNEAKY EXIT</b>: {name} a vândut >80% din {title} prin tranzacții mici.")
-                                    del global_state["micro_tracker"][pos_key]
-
                             if is_night and val >= 5000:
                                 global_state["nightly_sales"].append({
                                     "trader": name, "market": f"{title} ({outcome})", "amount": val
@@ -755,7 +771,12 @@ def bot_loop():
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 
-                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}")
+                                holding_warning = ""
+                                for my_p in global_state["my_portfolio"]:
+                                    if my_p['title'] == title:
+                                        holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
+
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
 
                     if c_valid_count >= 2 and c_total >= MINI:
                         if c_key not in global_state["cluster_created_at"]:
