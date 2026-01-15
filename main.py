@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL FIXED"
+# 1. CONFIGURARE "DOUBLE-CHECK PRO"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -35,8 +35,6 @@ MINI = 6000
 NORMAL = 10000
 BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
-
-# REGLAJ FIN: Alerte la 1500, dar pe Dashboard vezi de la 1000 in sus
 MIN_TRADER_DISPLAY = 1000 
 
 # Regula 9: Limita 3 Zile
@@ -141,7 +139,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Dashboard</title>
+    <title>PolyBot Double-Check</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -445,10 +443,12 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
+                    # FORCE MEMORARE INTRARE
                     entry = safe_float(item.get("avgBuyPrice"))
-                    if entry > 0: global_state["trader_entries"][pos_key] = entry
+                    if entry > 0: 
+                        global_state["trader_entries"][pos_key] = entry
         except: pass
-        time.sleep(1) # Pauza mica sa nu se blocheze API-ul
+        time.sleep(1)
 
 def sync_portfolio():
     print("♻️ Sincronizare Portofoliu Tău...")
@@ -582,7 +582,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Euan on Dashboard (>1000)\nFix: Sell Price Display\nFix: Entry Prices Restored") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Double-Check Pro (Dashboard Sync + Entry Prices)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -614,6 +614,7 @@ def bot_loop():
                     if ts <= last_ts: continue
                     if ts > new_max_ts: new_max_ts = ts
 
+                    # ANTI-SPAM
                     unique_id = e.get("id") or f"{e.get('transactionHash')}_{e.get('logIndex')}"
                     if unique_id in global_state["processed_ids"]: continue
                     global_state["processed_ids"].append(unique_id)
@@ -692,6 +693,15 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
                     
+                    # DETERMINA HOLDING WARNING GLOBAL INAINTE DE ORICE
+                    holding_warning_text = ""
+                    is_holding_flag = False
+                    for my_p in global_state["my_portfolio"]:
+                        if my_p['title'] == title:
+                            holding_warning_text = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
+                            is_holding_flag = True
+
+                    # --- ACTION LOGIC ---
                     if name == SELF:
                         if action == "buy":
                             tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>")
@@ -707,19 +717,13 @@ def bot_loop():
                     else:
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
-                            # FIX 1: UPDATE INSTANT INTRARE LA BUY
                             global_state["trader_entries"][pos_key] = price 
 
                             current_holding = global_state["positions"][pos_key]
 
                             if val >= MIN_BUY_ALERT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
-                                holding_warning = ""
-                                for my_p in global_state["my_portfolio"]:
-                                    if my_p['title'] == title:
-                                        holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
-
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning_text}")
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -750,12 +754,7 @@ def bot_loop():
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 
-                                holding_warning = ""
-                                for my_p in global_state["my_portfolio"]:
-                                    if my_p['title'] == title:
-                                        holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
-
-                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning_text}")
 
                     if c_valid_count >= 2 and c_total >= MINI:
                         if c_key not in global_state["cluster_created_at"]:
@@ -779,6 +778,8 @@ def bot_loop():
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
+                        if is_holding_flag: note += " | ⚠️ DEȚII ASTA!"
+                        
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
                             "trader": name, "action": action,
