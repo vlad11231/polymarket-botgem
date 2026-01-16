@@ -9,10 +9,9 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL REPAIR"
+# 1. CONFIGURARE "MASTERPIECE"
 # ==========================================
 
-# TOKEN ACTUALIZAT
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
 CHAT_ID = "6854863928"
 
@@ -29,7 +28,7 @@ MIN_BUY_ALERT = 1500
 MIN_SELL_ALERT = 1500  
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
-MIN_DASHBOARD_LOG = 500 
+MIN_DASHBOARD_LOG = 500  # Tot ce e peste 500 apare pe site
 
 # Clustere
 MINI = 6000      
@@ -38,7 +37,7 @@ BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
 
-# Variabila necesara pentru Regula 9
+# Regula 9
 ACCUMULATION_LIMIT_3DAYS = 15000
 
 RO = pytz.timezone("Europe/Bucharest")
@@ -80,14 +79,13 @@ global_state = {
     "session_accumulated": {}, 
     "buy_history": [],         
     "last_accum_alert": {},
-    "micro_tracker": {},    # Aici era problema (lipsea din json vechi)
+    "micro_tracker": {},    
     "last_update": "Never"
 }
 
 price_cache = {} 
 
 def sanitize_state():
-    # Asiguram ca TOATE cheile necesare exista, chiar daca fisierul e vechi
     defaults = {
         "clusters_sent": {},
         "cluster_created_at": {},
@@ -101,13 +99,11 @@ def sanitize_state():
         "session_accumulated": {},
         "buy_history": [],
         "last_accum_alert": {},
-        "micro_tracker": {}, # CRITIC: Adaugam fortat daca lipseste
+        "micro_tracker": {}, 
         "trade_log": []
     }
     for k, v in defaults.items():
         if k not in global_state: global_state[k] = v
-    
-    # Stergem shadow trading (curatenie)
     if "shadow" in global_state: del global_state["shadow"]
 
 def load():
@@ -119,20 +115,18 @@ def load():
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
             global_state["bot_start_time"] = current_start 
-            # Resetam doar sesiunea curenta, nu istoricul
-            global_state["session_accumulated"] = {}       
-            sanitize_state() # Apeleaza reparatia cheilor
+            # Nu resetam session_accumulated, lasam sa curga
+            sanitize_state()
         except: sanitize_state()
 
 def save():
-    # Limitam marimea listelor sa nu ingreuneze memoria
     if len(global_state["processed_ids"]) > 5000:
         global_state["processed_ids"] = global_state["processed_ids"][-5000:]
-    if len(global_state["trade_log"]) > 200:
-        global_state["trade_log"] = global_state["trade_log"][-200:]
+    # Marim log-ul sa tina minte mai multe
+    if len(global_state["trade_log"]) > 300:
+        global_state["trade_log"] = global_state["trade_log"][-300:]
     
     now_ts = time.time()
-    # Pastram istoricul de buy doar 4 zile
     global_state["buy_history"] = [
         b for b in global_state["buy_history"] 
         if now_ts - b["ts"] < 345600 
@@ -149,7 +143,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Final Repair</title>
+    <title>PolyBot Masterpiece</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -352,7 +346,7 @@ def index():
     
     for key in unique_session:
         vol, parts = get_cluster_data_session(key)
-        if len(parts) >= 2: 
+        if len(parts) >= 2 and vol >= MINI: 
             p_live = global_state['market_prices'].get(key, 0.5)
             sorted_sums = sorted(parts, key=lambda x: x[1], reverse=True)
             breakdown = ", ".join([f"{n}: ${v:,.0f}" for n, v in sorted_sums])
@@ -368,7 +362,7 @@ def index():
         
     for key in unique_all:
         vol, parts = get_cluster_data_all_time(key)
-        if len(parts) >= 2:
+        if len(parts) >= 2 and vol >= MINI:
             p_live = global_state['market_prices'].get(key, 0.5)
             sorted_sums = sorted(parts, key=lambda x: x[1], reverse=True)
             breakdown = ", ".join([f"{n}: ${v:,.0f}" for n, v in sorted_sums])
@@ -384,8 +378,8 @@ def index():
         HTML_TEMPLATE, 
         state=global_state, self_name=SELF, recommendations=recs, 
         min_dash=MIN_DASHBOARD_LOG, mini=MINI, 
-        session_clusters=session_clusters,
-        all_shared=all_shared
+        smart_clusters=smart_clusters[:MAX_DASHBOARD_CLUSTERS],
+        all_shared=all_shared[:20]
     )
 
 # ==========================================
@@ -592,7 +586,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: KEY ERROR RESOLVED\nFix: Micro Tracker & Limits Added") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: DASHBOARD HISTORY RESTORED\nFix: SELL EXIT PRICES") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -624,7 +618,6 @@ def bot_loop():
                     if ts <= last_ts: continue
                     if ts > new_max_ts: new_max_ts = ts
 
-                    # ANTI-SPAM
                     unique_id = e.get("id") or f"{e.get('transactionHash')}_{e.get('logIndex')}"
                     if unique_id in global_state["processed_ids"]: continue
                     global_state["processed_ids"].append(unique_id)
@@ -648,11 +641,13 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
-                    # LOGICA DASHBOARD SESSION
+                    # DASHBOARD SESSION LOGIC (REPARAT: SCADE LA SELL)
                     if action == "buy":
                         global_state["session_accumulated"][pos_key] = global_state["session_accumulated"].get(pos_key, 0) + val
+                    elif action == "sell":
+                        current_sess = global_state["session_accumulated"].get(pos_key, 0)
+                        global_state["session_accumulated"][pos_key] = max(0, current_sess - val)
                     
-                    # LOGICA 3 ZILE ACCUMULATION
                     if action == "buy":
                         global_state["buy_history"].append({
                             "user": name, "market": market_key, "amount": val, "ts": time.time()
@@ -665,7 +660,6 @@ def bot_loop():
                         total_3d = sum(recent_buys)
                         alert_key = f"{name}|{market_key}|3d"
                         last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
-                        
                         if total_3d > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
                             tg(f"🐳 <b>MASSIVE ACCUMULATION (3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 A cumpărat: <b>${total_3d:,.0f}</b> în ultimele 72h!")
                             global_state["last_accum_alert"][alert_key] = time.time()
@@ -680,6 +674,9 @@ def bot_loop():
                             cluster_users_sum[u_name] = cluster_users_sum.get(u_name, 0) + v
                             entry = global_state["trader_entries"].get(k, 0)
                             if entry > 0: cluster_users_entry[u_name] = entry
+                    
+                    # Definim c_total pentru cluster logic
+                    c_total = cluster_sum
                     
                     c_breakdown_list = []
                     c_valid_count = 0
@@ -705,13 +702,13 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
                     
-                    # HOLDING CHECK
                     holding_warning = ""
-                    is_holding = False
                     for my_p in global_state["my_portfolio"]:
                         if my_p['title'] == title:
-                            holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
-                            is_holding = True
+                            holding_warning = " | ⚠️ DEȚII ASTA!"
+                            
+                    holding_warning_alert = ""
+                    if holding_warning: holding_warning_alert = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
 
                     if name == SELF:
                         if action == "buy":
@@ -729,12 +726,11 @@ def bot_loop():
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
-
                             current_holding = global_state["positions"][pos_key]
 
                             if val >= MIN_BUY_ALERT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning_alert}")
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -747,10 +743,7 @@ def bot_loop():
                             
                             global_state["positions"][pos_key] = max(held_val - val, 0)
                             
-                            # === FIX EROARE MICRO_TRACKER ===
-                            if "micro_tracker" not in global_state: global_state["micro_tracker"] = {}
                             track = global_state["micro_tracker"].get(pos_key)
-                            
                             if track:
                                 track['sold'] += val
                                 if track['initial'] > 0 and (track['sold'] / track['initial']) >= MICRO_SELL_THRESHOLD_PCT:
@@ -767,32 +760,37 @@ def bot_loop():
                                 exit_str = f"📉 Vândut: <b>{pct_sold:.0f}%</b>"
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
+                                else:
+                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢ (Intrare necunoscută)"
                                 
-                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning_alert}")
 
                     if c_valid_count >= 2 and c_total >= MINI:
-                        if c_key not in global_state["cluster_created_at"]:
+                        if market_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
-                                global_state["cluster_created_at"][c_key] = 0 
-                                global_state["clusters_sent"][c_key] = c_total
+                                global_state["cluster_created_at"][market_key] = 0 
+                                global_state["clusters_sent"][market_key] = c_total
                             else:
-                                global_state["cluster_created_at"][c_key] = time.time()
+                                global_state["cluster_created_at"][market_key] = time.time()
 
-                        last_sent = global_state["clusters_sent"].get(c_key, 0)
+                        last_sent = global_state["clusters_sent"].get(market_key, 0)
                         if loop_count > 1 and c_total > last_sent * 1.2:
                             breakdown_str = "\n".join(c_breakdown_list)
-                            tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {c_key.split('|')[0]}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
-                            global_state["clusters_sent"][c_key] = c_total
+                            tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                            global_state["clusters_sent"][market_key] = c_total
                         
                         elif last_sent > 0 and c_total < last_sent * 0.6:
-                             tg(f"📉 <b>CLUSTER BREAKING APART</b>\n🏆 {c_key.split('|')[0]}\n💰 Au rămas doar: ${c_total:,.0f}")
-                             global_state["clusters_sent"][c_key] = c_total
+                             tg(f"📉 <b>CLUSTER BREAKING APART</b>\n🏆 {title}\n💰 Au rămas doar: ${c_total:,.0f}")
+                             global_state["clusters_sent"][market_key] = c_total
 
+                    # --- DASHBOARD LOGGING (FIXED LOCATION) ---
+                    # Salvarea in istoric se face acum INDEPENDENT de alerta pe Telegram
+                    # Se salveaza tot ce e peste 500, cu nota corecta
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
-                        if is_holding: note += " | ⚠️ DEȚII ASTA!"
+                        note += holding_warning # Adauga 'Detii Asta'
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
