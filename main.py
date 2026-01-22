@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "SOLID ROCK"
+# 1. CONFIGURARE "FINAL 2-DAY RULE"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -77,6 +77,7 @@ global_state = {
     "last_summary_day": "",
     "nightly_sales": [],    
     "session_accumulated": {}, 
+    "session_start_times": {}, # NEW: Timpul cand a inceput clusterul in sesiune
     "buy_history": [],         
     "last_accum_alert": {},
     "micro_tracker": {},    
@@ -97,6 +98,7 @@ def sanitize_state():
         "nightly_sales": [],
         "processed_ids": [],
         "session_accumulated": {},
+        "session_start_times": {}, # NEW
         "buy_history": [],
         "last_accum_alert": {},
         "micro_tracker": {}, 
@@ -115,7 +117,10 @@ def load():
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
             global_state["bot_start_time"] = current_start 
-            # Nu resetam session_accumulated la load, ca sa ramana pe durata rularii
+            # Nu resetam session_accumulated, lasam sa curga
+            # Daca vrem sa resetam sesiunea la restart:
+            # global_state["session_accumulated"] = {} 
+            # global_state["session_start_times"] = {}
             sanitize_state()
         except: sanitize_state()
 
@@ -142,7 +147,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Solid Rock</title>
+    <title>PolyBot 2-Day Rule</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -218,7 +223,7 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card" style="border: 1px solid #fdcb6e;">
-        <h3>⚡ Active Session Clusters (De la ultimul Restart)</h3>
+        <h3>⚡ Active Session Clusters (Recente &lt; 2 Zile)</h3>
         <table>
             <thead><tr><th>Piață</th><th>Side</th><th>Traderi (Sesiune)</th><th>Total Sesiune ($)</th><th>Preț</th></tr></thead>
             <tbody>
@@ -234,7 +239,7 @@ HTML_TEMPLATE = """
                     <td>{{ c.price }}¢</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#666;">Niciun cluster format în această sesiune.</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#666;">Niciun cluster recent.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -344,6 +349,11 @@ def index():
         if len(parts) == 3: unique_session.add(f"{parts[1]}|{parts[2]}")
     
     for key in unique_session:
+        # REGULA 2 ZILE (48 ORE)
+        start_ts = global_state["session_start_times"].get(key, time.time())
+        if time.time() - start_ts > 172800: # 172800 sec = 48 ore
+            continue # Skip daca e prea vechi
+
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= MINI: 
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -585,7 +595,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Error loop fixed\nFeatures: All Requested") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFeature: 2-Day Session Expiration\nFeature: Auto-Remove on Sell <1000") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -641,11 +651,16 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
-                    # DASHBOARD SESSION LOGIC (REPARAT: SCADE LA SELL)
+                    # LOGICA DASHBOARD SESSION + 2 ZILE EXPIRATION TRACKING
                     if action == "buy":
+                        if market_key not in global_state["session_start_times"]:
+                            global_state["session_start_times"][market_key] = time.time()
+                        
                         global_state["session_accumulated"][pos_key] = global_state["session_accumulated"].get(pos_key, 0) + val
+                        
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
+                        # Scade valoarea. Daca scade sub 1000, dispare automat din lista datorita filtrului din dashboard
                         global_state["session_accumulated"][pos_key] = max(0, current_sess - val)
                     
                     if action == "buy":
@@ -660,11 +675,11 @@ def bot_loop():
                         total_3d = sum(recent_buys)
                         alert_key = f"{name}|{market_key}|3d"
                         last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
+                        
                         if total_3d > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
                             tg(f"🐳 <b>MASSIVE ACCUMULATION (3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 A cumpărat: <b>${total_3d:,.0f}</b> în ultimele 72h!")
                             global_state["last_accum_alert"][alert_key] = time.time()
 
-                    # CLUSTER LOGIC - CALCUL
                     cluster_users_sum = {}
                     cluster_users_entry = {}
                     cluster_sum = 0
@@ -723,6 +738,7 @@ def bot_loop():
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
+
                             current_holding = global_state["positions"][pos_key]
 
                             if val >= MIN_BUY_ALERT:
@@ -758,11 +774,11 @@ def bot_loop():
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 else:
-                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢"
+                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢ (Intrare necunoscută)"
                                 
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
 
-                    if c_valid_count >= 2 and c_total >= MINI: # Folosim c_total care e sigur definit
+                    if c_valid_count >= 2 and c_total >= MINI:
                         if market_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
                                 global_state["cluster_created_at"][market_key] = 0 
