@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL 2-DAY RULE"
+# 1. CONFIGURARE "ULTIMATE v3"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -25,7 +25,8 @@ POLL = 60
 
 # Limite & Setari
 MIN_BUY_ALERT = 1500    
-MIN_SELL_ALERT = 1500  
+MIN_SELL_ALERT = 1500
+MIN_HOLDING_ALERT = 500  # REQ 3: Limita scade la 500 daca detii
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
@@ -37,7 +38,6 @@ BIG = 20000
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
 
-# Regula 9
 ACCUMULATION_LIMIT_3DAYS = 15000
 
 RO = pytz.timezone("Europe/Bucharest")
@@ -47,13 +47,17 @@ STATE_FILE = DATA_DIR / "state.json"
 SELF = "Pufu"
 SELF_ADDR = "0x872ec2644addbbf526744d8e3cb6b0356c0b73d7"
 
+# REQ 1: ADRESE NOI ADAUGATE
 TRADERS = {
     "Euan": {"addr": "0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1", "tier": 1},
     "Car": {"addr": "0x7c3db723f1d4d8cb9c550095203b686cb11e5c6b", "tier": 1},
     "JJo": {"addr": "0xc4086b708cd3a50880b7069add1a1a80000f4675", "tier": 2},
     "Scottilicious": {"addr": "0x000d257d2dc7616feaef4ae0f14600fdf50a758e", "tier": 1},
     "aenews": {"addr": "0x44c1dfe43260c94ed4f1d00de2e1f80fb113ebc1", "tier": 2},
-    "Dropper": {"addr": "0x6bab41a0dc40d6dd4c1a915b8c01969479fd1292", "tier": 2}
+    "Dropper": {"addr": "0x6bab41a0dc40d6dd4c1a915b8c01969479fd1292", "tier": 2},
+    "chungguskhan": {"addr": "0x7744bfd749a70020d16a1fcbac1d064761c9999e", "tier": 2},
+    "tsybka": {"addr": "0xd5ccdf772f795547e299de57f47966e24de8dea4", "tier": 2},
+    "ImJustKen": {"addr": "0x9d84ce0306f8551e02efef1680475fc0f1dc1344", "tier": 2}
 }
 
 # ==========================================
@@ -77,7 +81,7 @@ global_state = {
     "last_summary_day": "",
     "nightly_sales": [],    
     "session_accumulated": {}, 
-    "session_start_times": {}, # NEW: Timpul cand a inceput clusterul in sesiune
+    "session_start_times": {},
     "buy_history": [],         
     "last_accum_alert": {},
     "micro_tracker": {},    
@@ -98,7 +102,7 @@ def sanitize_state():
         "nightly_sales": [],
         "processed_ids": [],
         "session_accumulated": {},
-        "session_start_times": {}, # NEW
+        "session_start_times": {},
         "buy_history": [],
         "last_accum_alert": {},
         "micro_tracker": {}, 
@@ -117,18 +121,14 @@ def load():
             current_start = global_state["bot_start_time"]
             global_state.update(saved)
             global_state["bot_start_time"] = current_start 
-            # Nu resetam session_accumulated, lasam sa curga
-            # Daca vrem sa resetam sesiunea la restart:
-            # global_state["session_accumulated"] = {} 
-            # global_state["session_start_times"] = {}
             sanitize_state()
         except: sanitize_state()
 
 def save():
     if len(global_state["processed_ids"]) > 5000:
         global_state["processed_ids"] = global_state["processed_ids"][-5000:]
-    if len(global_state["trade_log"]) > 200:
-        global_state["trade_log"] = global_state["trade_log"][-200:]
+    if len(global_state["trade_log"]) > 300:
+        global_state["trade_log"] = global_state["trade_log"][-300:]
     
     now_ts = time.time()
     global_state["buy_history"] = [
@@ -147,7 +147,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot 2-Day Rule</title>
+    <title>PolyBot Ultimate v3</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -349,10 +349,9 @@ def index():
         if len(parts) == 3: unique_session.add(f"{parts[1]}|{parts[2]}")
     
     for key in unique_session:
-        # REGULA 2 ZILE (48 ORE)
         start_ts = global_state["session_start_times"].get(key, time.time())
-        if time.time() - start_ts > 172800: # 172800 sec = 48 ore
-            continue # Skip daca e prea vechi
+        if time.time() - start_ts > 172800: # 48h
+            continue 
 
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= MINI: 
@@ -456,7 +455,6 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
-                    # FORCE MEMORARE INTRARE
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: 
                         global_state["trader_entries"][pos_key] = entry
@@ -595,7 +593,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFeature: 2-Day Session Expiration\nFeature: Auto-Remove on Sell <1000") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nNew Traders Added\nAlert Logic Fixed (Decrease/Increase)\nHolding Limit: $500") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -634,7 +632,8 @@ def bot_loop():
 
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
-                    if e.get("type") == "MERGE": continue 
+                    # REQ 5: ALLOW MERGE TO CATCH MORE TRADES
+                    # if e.get("type") == "MERGE": continue 
 
                     outcome = e.get("outcome", "YES").upper()
                     event_side = e.get("side", "BUY").upper()
@@ -651,17 +650,31 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
-                    # LOGICA DASHBOARD SESSION + 2 ZILE EXPIRATION TRACKING
+                    # REQ 3 & 5: DETERMINA LIMITA DINAMIC (500 daca detin, 1500 altfel)
+                    CURRENT_ALERT_LIMIT = MIN_BUY_ALERT
+                    holding_warning = ""
+                    is_holding_flag = False
+                    for my_p in global_state["my_portfolio"]:
+                        if my_p['title'] == title:
+                            holding_warning = " | ⚠️ DEȚII ASTA!"
+                            holding_warning_alert = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
+                            is_holding_flag = True
+                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT # Scade la 500
+
+                    # LOGICA DASHBOARD SESSION + 2 ZILE
                     if action == "buy":
                         if market_key not in global_state["session_start_times"]:
                             global_state["session_start_times"][market_key] = time.time()
-                        
                         global_state["session_accumulated"][pos_key] = global_state["session_accumulated"].get(pos_key, 0) + val
                         
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
-                        # Scade valoarea. Daca scade sub 1000, dispare automat din lista datorita filtrului din dashboard
-                        global_state["session_accumulated"][pos_key] = max(0, current_sess - val)
+                        new_sess_val = max(0, current_sess - val)
+                        if new_sess_val < 1: 
+                            if pos_key in global_state["session_accumulated"]:
+                                del global_state["session_accumulated"][pos_key] # Remove key completely
+                        else:
+                            global_state["session_accumulated"][pos_key] = new_sess_val
                     
                     if action == "buy":
                         global_state["buy_history"].append({
@@ -675,7 +688,6 @@ def bot_loop():
                         total_3d = sum(recent_buys)
                         alert_key = f"{name}|{market_key}|3d"
                         last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
-                        
                         if total_3d > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
                             tg(f"🐳 <b>MASSIVE ACCUMULATION (3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 A cumpărat: <b>${total_3d:,.0f}</b> în ultimele 72h!")
                             global_state["last_accum_alert"][alert_key] = time.time()
@@ -691,7 +703,7 @@ def bot_loop():
                             entry = global_state["trader_entries"].get(k, 0)
                             if entry > 0: cluster_users_entry[u_name] = entry
                     
-                    c_total = cluster_sum # Initializare variabila pentru a evita eroarea
+                    c_total = cluster_sum
                     
                     c_breakdown_list = []
                     c_valid_count = 0
@@ -716,11 +728,6 @@ def bot_loop():
                     if action == "sell": action_ro = "A VÂNDUT"
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
-                    
-                    holding_warning = ""
-                    for my_p in global_state["my_portfolio"]:
-                        if my_p['title'] == title:
-                            holding_warning = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
 
                     if name == SELF:
                         if action == "buy":
@@ -738,12 +745,12 @@ def bot_loop():
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
-
                             current_holding = global_state["positions"][pos_key]
 
-                            if val >= MIN_BUY_ALERT:
+                            if val >= CURRENT_ALERT_LIMIT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{holding_warning}")
+                                alert_extra = holding_warning_alert if is_holding_flag else ""
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -768,17 +775,19 @@ def bot_loop():
                                     "trader": name, "market": f"{title} ({outcome})", "amount": val
                                 })
 
-                            if val >= MIN_SELL_ALERT:
+                            if val >= CURRENT_ALERT_LIMIT:
                                 pp_warn = "⚡ <b>PING-PONG</b>" if is_ping_pong else ""
                                 exit_str = f"📉 Vândut: <b>{pct_sold:.0f}%</b>"
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 else:
-                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢ (Intrare necunoscută)"
+                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢"
                                 
-                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{holding_warning}")
+                                alert_extra = holding_warning_alert if is_holding_flag else ""
+                                tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
 
-                    if c_valid_count >= 2 and c_total >= MINI:
+                    # CLUSTERE: REQ 2 (DECREASE / INCREASE LOGIC FIX)
+                    if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
                                 global_state["cluster_created_at"][market_key] = 0 
@@ -787,20 +796,29 @@ def bot_loop():
                                 global_state["cluster_created_at"][market_key] = time.time()
 
                         last_sent = global_state["clusters_sent"].get(market_key, 0)
-                        if loop_count > 1 and c_total > last_sent * 1.2:
+                        
+                        # LOGICA NOUA: Increase sau Decrease
+                        # 1. Increase semnificativ (>20% crestere)
+                        if c_total > last_sent * 1.2:
                             breakdown_str = "\n".join(c_breakdown_list)
                             tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                             global_state["clusters_sent"][market_key] = c_total
                         
-                        elif last_sent > 0 and c_total < last_sent * 0.6:
-                             tg(f"📉 <b>CLUSTER BREAKING APART</b>\n🏆 {title}\n💰 Au rămas doar: ${c_total:,.0f}")
+                        # 2. Decrease (scadere) - dar sa nu fie zero total
+                        elif c_total < last_sent and c_total >= MINI:
+                             tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f} (A scăzut)")
+                             global_state["clusters_sent"][market_key] = c_total
+                        
+                        # 3. Breaking Apart (scade sub limita de cluster)
+                        elif last_sent >= MINI and c_total < MINI:
+                             tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
                              global_state["clusters_sent"][market_key] = c_total
 
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
-                        if "DEȚII ASTA" in holding_warning: note += " | ⚠️ YOUR HOLDING"
+                        if is_holding_flag: note += " | ⚠️ YOUR HOLDING"
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
