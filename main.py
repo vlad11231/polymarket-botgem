@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ULTIMATE v3"
+# 1. CONFIGURARE "CLUSTER PRECISION v4"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -26,15 +26,13 @@ POLL = 60
 # Limite & Setari
 MIN_BUY_ALERT = 1500    
 MIN_SELL_ALERT = 1500
-MIN_HOLDING_ALERT = 500  # REQ 3: Limita scade la 500 daca detii
+MIN_HOLDING_ALERT = 500  # Daca detii pozitia, te anunta de la 500
 MICRO_SELL_THRESHOLD_PCT = 0.80 
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
 
 # Clustere
-MINI = 6000      
-NORMAL = 10000
-BIG = 20000
+MINI_CLUSTER_ALERT = 15000 # REQ: Alerta doar peste 15k
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
 
@@ -47,7 +45,6 @@ STATE_FILE = DATA_DIR / "state.json"
 SELF = "Pufu"
 SELF_ADDR = "0x872ec2644addbbf526744d8e3cb6b0356c0b73d7"
 
-# REQ 1: ADRESE NOI ADAUGATE
 TRADERS = {
     "Euan": {"addr": "0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1", "tier": 1},
     "Car": {"addr": "0x7c3db723f1d4d8cb9c550095203b686cb11e5c6b", "tier": 1},
@@ -147,7 +144,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Ultimate v3</title>
+    <title>PolyBot Cluster Precision</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -350,11 +347,12 @@ def index():
     
     for key in unique_session:
         start_ts = global_state["session_start_times"].get(key, time.time())
-        if time.time() - start_ts > 172800: # 48h
+        if time.time() - start_ts > 172800: 
             continue 
 
+        # Aici e regula doar de afisare pe dashboard (6000), dar pe telegram e 15000
         vol, parts = get_cluster_data_session(key)
-        if len(parts) >= 2 and vol >= MINI: 
+        if len(parts) >= 2 and vol >= 6000: # Dashboard vede de la 6000 
             p_live = global_state['market_prices'].get(key, 0.5)
             sorted_sums = sorted(parts, key=lambda x: x[1], reverse=True)
             breakdown = ", ".join([f"{n}: ${v:,.0f}" for n, v in sorted_sums])
@@ -370,7 +368,7 @@ def index():
         
     for key in unique_all:
         vol, parts = get_cluster_data_all_time(key)
-        if len(parts) >= 2 and vol >= MINI:
+        if len(parts) >= 2 and vol >= 6000:
             p_live = global_state['market_prices'].get(key, 0.5)
             sorted_sums = sorted(parts, key=lambda x: x[1], reverse=True)
             breakdown = ", ".join([f"{n}: ${v:,.0f}" for n, v in sorted_sums])
@@ -385,7 +383,7 @@ def index():
     return render_template_string(
         HTML_TEMPLATE, 
         state=global_state, self_name=SELF, recommendations=recs, 
-        min_dash=MIN_DASHBOARD_LOG, mini=MINI, 
+        min_dash=MIN_DASHBOARD_LOG, mini=MINI_CLUSTER_ALERT, 
         session_clusters=session_clusters,
         all_shared=all_shared
     )
@@ -455,6 +453,7 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
+                    # FORCE MEMORARE INTRARE
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: 
                         global_state["trader_entries"][pos_key] = entry
@@ -567,7 +566,7 @@ def check_nightly_summary():
             c_sum = 0
             for pos_k, val in global_state["positions"].items():
                 if key in pos_k and not pos_k.startswith(SELF): c_sum += val
-            if c_sum >= MINI:
+            if c_sum >= MINI_CLUSTER_ALERT:
                 active_clusters.append((key, c_sum))
         if not active_clusters: clusters_msg += "<i>(Toate clusterele s-au dizolvat.)</i>\n"
         else:
@@ -593,7 +592,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nNew Traders Added\nAlert Logic Fixed (Decrease/Increase)\nHolding Limit: $500") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nCluster: Increase/Decrease Fixed\nLimit: >$15k for Cluster Alert") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -632,7 +631,7 @@ def bot_loop():
 
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
-                    # REQ 5: ALLOW MERGE TO CATCH MORE TRADES
+                    # REQ: ALLOW MERGE
                     # if e.get("type") == "MERGE": continue 
 
                     outcome = e.get("outcome", "YES").upper()
@@ -650,7 +649,7 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
-                    # REQ 3 & 5: DETERMINA LIMITA DINAMIC (500 daca detin, 1500 altfel)
+                    # REQ: DYNAMIC LIMIT
                     CURRENT_ALERT_LIMIT = MIN_BUY_ALERT
                     holding_warning = ""
                     is_holding_flag = False
@@ -659,9 +658,9 @@ def bot_loop():
                             holding_warning = " | ⚠️ DEȚII ASTA!"
                             holding_warning_alert = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
                             is_holding_flag = True
-                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT # Scade la 500
+                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT
 
-                    # LOGICA DASHBOARD SESSION + 2 ZILE
+                    # DASHBOARD SESSION LOGIC
                     if action == "buy":
                         if market_key not in global_state["session_start_times"]:
                             global_state["session_start_times"][market_key] = time.time()
@@ -672,7 +671,7 @@ def bot_loop():
                         new_sess_val = max(0, current_sess - val)
                         if new_sess_val < 1: 
                             if pos_key in global_state["session_accumulated"]:
-                                del global_state["session_accumulated"][pos_key] # Remove key completely
+                                del global_state["session_accumulated"][pos_key]
                         else:
                             global_state["session_accumulated"][pos_key] = new_sess_val
                     
@@ -688,6 +687,7 @@ def bot_loop():
                         total_3d = sum(recent_buys)
                         alert_key = f"{name}|{market_key}|3d"
                         last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
+                        
                         if total_3d > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
                             tg(f"🐳 <b>MASSIVE ACCUMULATION (3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 A cumpărat: <b>${total_3d:,.0f}</b> în ultimele 72h!")
                             global_state["last_accum_alert"][alert_key] = time.time()
@@ -781,12 +781,12 @@ def bot_loop():
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
                                 else:
-                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢"
+                                    exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢ (Intrare necunoscută)"
                                 
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
 
-                    # CLUSTERE: REQ 2 (DECREASE / INCREASE LOGIC FIX)
+                    # === CLUSTER LOGIC FIXED (Increase/Decrease & >15k) ===
                     if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if loop_count == 1:
@@ -797,20 +797,27 @@ def bot_loop():
 
                         last_sent = global_state["clusters_sent"].get(market_key, 0)
                         
-                        # LOGICA NOUA: Increase sau Decrease
-                        # 1. Increase semnificativ (>20% crestere)
-                        if c_total > last_sent * 1.2:
+                        # CALCULEAZA DIFERENTA REALA
+                        diff = c_total - last_sent
+                        
+                        # CONDITII DE TRIMITERE:
+                        # 1. Total > 15000 (Regula ta)
+                        # 2. Diferenta semnificativa (> 1000) ca sa nu spameze la fiecare dolar
+                        if c_total >= MINI_CLUSTER_ALERT and abs(diff) > 1000:
                             breakdown_str = "\n".join(c_breakdown_list)
-                            tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                            
+                            if diff > 0:
+                                # INCREASE
+                                tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                            else:
+                                # DECREASE
+                                tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                            
+                            # Actualizam suma trimisa
                             global_state["clusters_sent"][market_key] = c_total
                         
-                        # 2. Decrease (scadere) - dar sa nu fie zero total
-                        elif c_total < last_sent and c_total >= MINI:
-                             tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f} (A scăzut)")
-                             global_state["clusters_sent"][market_key] = c_total
-                        
-                        # 3. Breaking Apart (scade sub limita de cluster)
-                        elif last_sent >= MINI and c_total < MINI:
+                        # 3. BREAKING APART (Scade sub 15000)
+                        elif last_sent >= MINI_CLUSTER_ALERT and c_total < MINI_CLUSTER_ALERT:
                              tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
                              global_state["clusters_sent"][market_key] = c_total
 
