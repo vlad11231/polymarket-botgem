@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "CLUSTER WARLORD v5"
+# 1. CONFIGURARE "GOD MODE v6"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -31,12 +31,16 @@ MICRO_SELL_THRESHOLD_PCT = 0.80
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
 
-# Clustere (Regula stricta: 15k)
-MINI_CLUSTER_ALERT = 15000 
+# Clustere Telegram (Hard Mode)
+MINI_CLUSTER_ALERT = 15000      # Clusterul trebuie sa fie mare
+CLUSTER_CHANGE_THRESHOLD = 25000 # Alerta doar daca se misca cu 25k (Increase/Decrease)
+
+# Dashboard Setari
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
 
-ACCUMULATION_LIMIT_3DAYS = 15000
+# Regula 9: Acumulare Neta
+ACCUMULATION_LIMIT_3DAYS = 30000
 
 RO = pytz.timezone("Europe/Bucharest")
 DATA_DIR = Path("/app/data") if os.getenv("RAILWAY_ENVIRONMENT") else Path(".")
@@ -74,12 +78,12 @@ global_state = {
     "processed_ids": [],    
     "cluster_participants": {}, 
     "cluster_created_at": {}, 
-    "clusters_sent": {}, # Memoreaza ultima suma trimisa pentru a calcula diff
+    "clusters_sent": {},
     "last_summary_day": "",
     "nightly_sales": [],    
     "session_accumulated": {}, 
     "session_start_times": {},
-    "buy_history": [],         
+    "trade_history": [], # Changed from buy_history to generic trade_history for Net calculation
     "last_accum_alert": {},
     "micro_tracker": {},    
     "last_update": "Never"
@@ -100,7 +104,7 @@ def sanitize_state():
         "processed_ids": [],
         "session_accumulated": {},
         "session_start_times": {},
-        "buy_history": [],
+        "trade_history": [],
         "last_accum_alert": {},
         "micro_tracker": {}, 
         "trade_log": []
@@ -108,6 +112,9 @@ def sanitize_state():
     for k, v in defaults.items():
         if k not in global_state: global_state[k] = v
     if "shadow" in global_state: del global_state["shadow"]
+    # Migration for old state
+    if "buy_history" in global_state and not global_state["trade_history"]:
+        global_state["trade_history"] = global_state["buy_history"]
 
 def load():
     global global_state
@@ -128,9 +135,10 @@ def save():
         global_state["trade_log"] = global_state["trade_log"][-300:]
     
     now_ts = time.time()
-    global_state["buy_history"] = [
-        b for b in global_state["buy_history"] 
-        if now_ts - b["ts"] < 345600 
+    # Clean old history > 4 days
+    global_state["trade_history"] = [
+        t for t in global_state["trade_history"] 
+        if now_ts - t["ts"] < 345600 
     ]
     
     STATE_FILE.write_text(json.dumps(global_state, indent=2))
@@ -144,7 +152,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Cluster Warlord</title>
+    <title>PolyBot God Mode v6</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -350,7 +358,7 @@ def index():
         if time.time() - start_ts > 172800: 
             continue 
 
-        # Dashboard vede si clustere mai mici (6000), dar pe telegram doar 15000
+        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -453,7 +461,6 @@ def sync_trader_positions():
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
-                    # FORCE MEMORARE INTRARE
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: 
                         global_state["trader_entries"][pos_key] = entry
@@ -592,7 +599,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nCluster Alert STRICT: >$15k & >2 People\nDecrease Alert: Only if significant") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: MERGE Handling\nFix: Net Accumulation ($30k)\nCluster Sensitivity: $25k") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -631,8 +638,19 @@ def bot_loop():
 
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
-                    # ALLOW MERGE
-                    # if e.get("type") == "MERGE": continue 
+                    
+                    # === MERGE / REDEMPTION FIX ===
+                    event_type = e.get("type", "TRADE")
+                    if event_type in ["MERGE", "REDEMPTION"]:
+                        # Scadem din sesiune dar nu trimitem alerta
+                        pos_key = f"{name}|{title}|{e.get('outcome', 'YES').upper()}"
+                        val = get_usd(e)
+                        if pos_key in global_state["session_accumulated"]:
+                            current_sess = global_state["session_accumulated"][pos_key]
+                            new_sess = max(0, current_sess - val)
+                            if new_sess < 500: del global_state["session_accumulated"][pos_key]
+                            else: global_state["session_accumulated"][pos_key] = new_sess
+                        continue # Skip to next event (no TG alert)
 
                     outcome = e.get("outcome", "YES").upper()
                     event_side = e.get("side", "BUY").upper()
@@ -669,28 +687,31 @@ def bot_loop():
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
                         new_sess_val = max(0, current_sess - val)
-                        if new_sess_val < 1: 
+                        if new_sess_val < 500: # FIX: Sterge daca scade sub 500
                             if pos_key in global_state["session_accumulated"]:
                                 del global_state["session_accumulated"][pos_key]
                         else:
                             global_state["session_accumulated"][pos_key] = new_sess_val
                     
-                    if action == "buy":
-                        global_state["buy_history"].append({
-                            "user": name, "market": market_key, "amount": val, "ts": time.time()
-                        })
-                        cutoff = time.time() - (3 * 24 * 3600)
-                        recent_buys = [
-                            b["amount"] for b in global_state["buy_history"]
-                            if b["user"] == name and b["market"] == market_key and b["ts"] > cutoff
-                        ]
-                        total_3d = sum(recent_buys)
-                        alert_key = f"{name}|{market_key}|3d"
-                        last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
-                        
-                        if total_3d > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
-                            tg(f"🐳 <b>MASSIVE ACCUMULATION (3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 A cumpărat: <b>${total_3d:,.0f}</b> în ultimele 72h!")
-                            global_state["last_accum_alert"][alert_key] = time.time()
+                    # === NET ACCUMULATION FIX ===
+                    trade_val = val if action == "buy" else -val
+                    global_state["trade_history"].append({
+                        "user": name, "market": market_key, "amount": trade_val, "ts": time.time()
+                    })
+                    
+                    # Check Net Accumulation
+                    cutoff = time.time() - (3 * 24 * 3600)
+                    recent_trades = [
+                        t["amount"] for t in global_state["trade_history"]
+                        if t["user"] == name and t["market"] == market_key and t["ts"] > cutoff
+                    ]
+                    net_accumulated = sum(recent_trades)
+                    
+                    alert_key = f"{name}|{market_key}|3d"
+                    last_alert_time = global_state["last_accum_alert"].get(alert_key, 0)
+                    if net_accumulated > ACCUMULATION_LIMIT_3DAYS and (time.time() - last_alert_time > 3600):
+                        tg(f"🐳 <b>WHALE ACCUMULATION (Net 3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 Net: <b>${net_accumulated:,.0f}</b>")
+                        global_state["last_accum_alert"][alert_key] = time.time()
 
                     cluster_users_sum = {}
                     cluster_users_entry = {}
@@ -729,6 +750,8 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
 
+                    # ALERTE INDIVIDUALE (AU PRIORITATE)
+                    alert_sent = False
                     if name == SELF:
                         if action == "buy":
                             tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>")
@@ -740,6 +763,7 @@ def bot_loop():
                             msg += f"{reinvest_msg}"
                             tg(msg)
                         threading.Thread(target=sync_portfolio).start()
+                        alert_sent = True
 
                     else:
                         if action == "buy":
@@ -751,6 +775,7 @@ def bot_loop():
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
+                                alert_sent = True
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
@@ -785,38 +810,32 @@ def bot_loop():
                                 
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
+                                alert_sent = True
 
                     # === CLUSTER LOGIC: STRICT ===
-                    # 1. Este cluster VALID ACUM? (>= 2 Persoane SI >= 15k)
-                    is_valid_cluster_now = (c_valid_count >= 2 and c_total >= MINI_CLUSTER_ALERT)
-                    
-                    if market_key not in global_state["cluster_created_at"]:
-                        # Initializeaza daca nu exista
-                        if is_valid_cluster_now:
-                            global_state["cluster_created_at"][market_key] = time.time()
-                            global_state["clusters_sent"][market_key] = c_total
-                    else:
-                        # Exista deja, verificam diferentele
-                        last_sent = global_state["clusters_sent"].get(market_key, 0)
-                        diff = c_total - last_sent
-                        
-                        if is_valid_cluster_now:
-                            # E valid, vedem daca a crescut/scazut
-                            if diff > 1000: 
+                    if c_valid_count >= 2:
+                        if market_key not in global_state["cluster_created_at"]:
+                            if c_total >= MINI_CLUSTER_ALERT:
+                                global_state["cluster_created_at"][market_key] = time.time()
+                                global_state["clusters_sent"][market_key] = c_total
+                        else:
+                            last_sent = global_state["clusters_sent"].get(market_key, 0)
+                            diff = c_total - last_sent
+                            
+                            # Doar daca suma totala e mare SI diferenta e semnificativa (25k)
+                            if c_total >= MINI_CLUSTER_ALERT and abs(diff) >= CLUSTER_CHANGE_THRESHOLD:
                                 breakdown_str = "\n".join(c_breakdown_list)
-                                tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                
+                                if diff > 0:
+                                    tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                else:
+                                    tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                
                                 global_state["clusters_sent"][market_key] = c_total
                             
-                            elif diff < -1000:
-                                breakdown_str = "\n".join(c_breakdown_list)
-                                tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
-                                global_state["clusters_sent"][market_key] = c_total
-                        
-                        else:
-                            # NU mai e valid acum, dar a fost inainte?
-                            if last_sent >= MINI_CLUSTER_ALERT:
-                                tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
-                                global_state["clusters_sent"][market_key] = c_total # Resetam sa nu mai spameze
+                            elif last_sent >= MINI_CLUSTER_ALERT and c_total < MINI_CLUSTER_ALERT:
+                                 tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
+                                 global_state["clusters_sent"][market_key] = c_total
 
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
