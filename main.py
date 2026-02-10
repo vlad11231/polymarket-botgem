@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "GOD MODE v6"
+# 1. CONFIGURARE "PLATINUM v7"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -31,15 +31,15 @@ MICRO_SELL_THRESHOLD_PCT = 0.80
 WHALE_ALERT = 5000      
 MIN_DASHBOARD_LOG = 500 
 
-# Clustere Telegram (Hard Mode)
-MINI_CLUSTER_ALERT = 15000      # Clusterul trebuie sa fie mare
-CLUSTER_CHANGE_THRESHOLD = 25000 # Alerta doar daca se misca cu 25k (Increase/Decrease)
+# PING PONG WINDOW (8 Ore = 28800 secunde)
+PING_PONG_WINDOW = 28800
 
-# Dashboard Setari
+# Clustere (Regula stricta: 15k)
+MINI_CLUSTER_ALERT = 15000 
+CLUSTER_CHANGE_THRESHOLD = 25000 
 MAX_DASHBOARD_CLUSTERS = 20 
 MIN_TRADER_DISPLAY = 1000 
 
-# Regula 9: Acumulare Neta
 ACCUMULATION_LIMIT_3DAYS = 30000
 
 RO = pytz.timezone("Europe/Bucharest")
@@ -83,7 +83,7 @@ global_state = {
     "nightly_sales": [],    
     "session_accumulated": {}, 
     "session_start_times": {},
-    "trade_history": [], # Changed from buy_history to generic trade_history for Net calculation
+    "trade_history": [],
     "last_accum_alert": {},
     "micro_tracker": {},    
     "last_update": "Never"
@@ -112,7 +112,6 @@ def sanitize_state():
     for k, v in defaults.items():
         if k not in global_state: global_state[k] = v
     if "shadow" in global_state: del global_state["shadow"]
-    # Migration for old state
     if "buy_history" in global_state and not global_state["trade_history"]:
         global_state["trade_history"] = global_state["buy_history"]
 
@@ -135,7 +134,6 @@ def save():
         global_state["trade_log"] = global_state["trade_log"][-300:]
     
     now_ts = time.time()
-    # Clean old history > 4 days
     global_state["trade_history"] = [
         t for t in global_state["trade_history"] 
         if now_ts - t["ts"] < 345600 
@@ -152,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot God Mode v6</title>
+    <title>PolyBot Platinum v7</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -599,7 +597,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: MERGE Handling\nFix: Net Accumulation ($30k)\nCluster Sensitivity: $25k") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: MERGE Alerts Active (Fake Buy)\nFix: PingPong 8 Hours\nFix: Cluster Alert Instant Formation") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -639,23 +637,21 @@ def bot_loop():
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
                     
-                    # === MERGE / REDEMPTION FIX ===
+                    # === MERGE LOGIC (REPARAT: TRECE PESTE FILTRU) ===
+                    is_merge_event = False
                     event_type = e.get("type", "TRADE")
                     if event_type in ["MERGE", "REDEMPTION"]:
-                        # Scadem din sesiune dar nu trimitem alerta
-                        pos_key = f"{name}|{title}|{e.get('outcome', 'YES').upper()}"
-                        val = get_usd(e)
-                        if pos_key in global_state["session_accumulated"]:
-                            current_sess = global_state["session_accumulated"][pos_key]
-                            new_sess = max(0, current_sess - val)
-                            if new_sess < 500: del global_state["session_accumulated"][pos_key]
-                            else: global_state["session_accumulated"][pos_key] = new_sess
-                        continue # Skip to next event (no TG alert)
+                        is_merge_event = True
+                        # Nu mai dam continue, ci procesam ca sa apara in alerte si dashboard
 
                     outcome = e.get("outcome", "YES").upper()
                     event_side = e.get("side", "BUY").upper()
                     action = "sell" if event_side == "SELL" else "buy"
                     
+                    # Daca e merge, de obicei e un sell camuflat sau inchidere pozitie
+                    if is_merge_event:
+                        action = "sell" # Tratăm merge ca un sell pentru logică
+
                     val = get_usd(e)
                     price = float(e.get("price", 0))
                     
@@ -687,13 +683,13 @@ def bot_loop():
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
                         new_sess_val = max(0, current_sess - val)
-                        if new_sess_val < 500: # FIX: Sterge daca scade sub 500
+                        if new_sess_val < 500: 
                             if pos_key in global_state["session_accumulated"]:
                                 del global_state["session_accumulated"][pos_key]
                         else:
                             global_state["session_accumulated"][pos_key] = new_sess_val
                     
-                    # === NET ACCUMULATION FIX ===
+                    # NET ACCUMULATION logic
                     trade_val = val if action == "buy" else -val
                     global_state["trade_history"].append({
                         "user": name, "market": market_key, "amount": trade_val, "ts": time.time()
@@ -738,7 +734,8 @@ def bot_loop():
                     is_ping_pong = False
                     if action == "sell":
                         last_buy = global_state["last_buy_times"].get(pos_key, 0)
-                        if ts - last_buy < 3600 and last_buy != 0: is_ping_pong = True
+                        # REQ 2: PING PONG 8 HOURS
+                        if ts - last_buy < PING_PONG_WINDOW and last_buy != 0: is_ping_pong = True
                     if action == "buy": global_state["last_buy_times"][pos_key] = ts
 
                     c_list_users = list(cluster_users_sum.keys())
@@ -750,7 +747,7 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
 
-                    # ALERTE INDIVIDUALE (AU PRIORITATE)
+                    # ALERTE INDIVIDUALE
                     alert_sent = False
                     if name == SELF:
                         if action == "buy":
@@ -802,6 +799,11 @@ def bot_loop():
 
                             if val >= CURRENT_ALERT_LIMIT:
                                 pp_warn = "⚡ <b>PING-PONG</b>" if is_ping_pong else ""
+                                
+                                # REQ 1: MERGE ALERT (FAKE BUY LABEL)
+                                if is_merge_event:
+                                    pp_warn += "\n⚠️ <b>MERGE / HEDGE</b> (Fake Buy/Close)"
+
                                 exit_str = f"📉 Vândut: <b>{pct_sold:.0f}%</b>"
                                 if entry_price > 0: 
                                     exit_str += f"\n🚪 Intrare: {entry_price*100:.1f}¢ ➔ Ieșire: {price*100:.1f}¢"
@@ -812,36 +814,43 @@ def bot_loop():
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
                                 alert_sent = True
 
-                    # === CLUSTER LOGIC: STRICT ===
-                    if c_valid_count >= 2:
-                        if market_key not in global_state["cluster_created_at"]:
-                            if c_total >= MINI_CLUSTER_ALERT:
-                                global_state["cluster_created_at"][market_key] = time.time()
-                                global_state["clusters_sent"][market_key] = c_total
-                        else:
-                            last_sent = global_state["clusters_sent"].get(market_key, 0)
-                            diff = c_total - last_sent
-                            
-                            # Doar daca suma totala e mare SI diferenta e semnificativa (25k)
-                            if c_total >= MINI_CLUSTER_ALERT and abs(diff) >= CLUSTER_CHANGE_THRESHOLD:
+                    # === CLUSTER LOGIC ===
+                    # 1. Validitate curenta
+                    is_valid_cluster_now = (c_valid_count >= 2 and c_total >= MINI_CLUSTER_ALERT)
+                    
+                    if market_key not in global_state["cluster_created_at"]:
+                        if is_valid_cluster_now:
+                            global_state["cluster_created_at"][market_key] = time.time()
+                            global_state["clusters_sent"][market_key] = c_total
+                            # REQ 3: ALERTA LA FORMARE INITIALA
+                            breakdown_str = "\n".join(c_breakdown_list)
+                            tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                    else:
+                        last_sent = global_state["clusters_sent"].get(market_key, 0)
+                        diff = c_total - last_sent
+                        
+                        if is_valid_cluster_now:
+                            if diff > 25000: # Threshold mare pt update
                                 breakdown_str = "\n".join(c_breakdown_list)
-                                
-                                if diff > 0:
-                                    tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
-                                else:
-                                    tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
-                                
+                                tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                                 global_state["clusters_sent"][market_key] = c_total
                             
-                            elif last_sent >= MINI_CLUSTER_ALERT and c_total < MINI_CLUSTER_ALERT:
-                                 tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
-                                 global_state["clusters_sent"][market_key] = c_total
+                            elif diff < -25000:
+                                breakdown_str = "\n".join(c_breakdown_list)
+                                tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                global_state["clusters_sent"][market_key] = c_total
+                        
+                        else:
+                            if last_sent >= MINI_CLUSTER_ALERT:
+                                tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
+                                global_state["clusters_sent"][market_key] = c_total 
 
                     if val >= MIN_DASHBOARD_LOG:
                         note = f"Scor: {current_score:.1f}"
                         if is_ping_pong: note += " | ⚠️ PingPong"
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
                         if is_holding_flag: note += " | ⚠️ YOUR HOLDING"
+                        if is_merge_event: note += " | ⚠️ MERGE"
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
