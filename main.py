@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "DIAMOND HANDS v9"
+# 1. CONFIGURARE "FINAL DIAMOND v10"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Diamond v9</title>
+    <title>PolyBot Diamond v10</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -597,7 +597,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Opposite Side Alert (Hedge)\nFix: Dashboard Cleanup on Sell/Merge\nFix: Cluster Formed (New Only)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: MERGE Value=Size\nFix: Cluster Formed Logic (New Only)\nFix: Dashboard Cleanup") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -637,7 +637,6 @@ def bot_loop():
                     title = e.get("title", "")
                     if not title or title.strip() == "": continue 
                     
-                    # === MERGE LOGIC (REPARAT: TRECE PESTE FILTRU, CURATA DASHBOARD) ===
                     is_merge_event = False
                     event_type = e.get("type", "TRADE")
                     
@@ -645,11 +644,16 @@ def bot_loop():
                     event_side = e.get("side", "BUY").upper()
                     action = "sell" if event_side == "SELL" else "buy"
                     
+                    # FIX 1: MERGE VALUE
                     if event_type in ["MERGE", "REDEMPTION"]:
                         is_merge_event = True
-                        action = "sell" # Tratăm merge ca un sell pentru dashboard cleanup
+                        action = "sell" 
+                        # La merge, valoarea in dolari e egala cu size (1 set = $1)
+                        # API returneaza uneori value=0, asa ca luam size
+                        val = float(e.get("size", 0))
+                    else:
+                        val = get_usd(e)
 
-                    val = get_usd(e)
                     price = float(e.get("price", 0))
                     
                     pos_key = f"{name}|{title}|{outcome}"
@@ -683,7 +687,7 @@ def bot_loop():
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
                         new_sess_val = max(0, current_sess - val)
-                        if new_sess_val < 100: # FIX 2: Strict cleanup
+                        if new_sess_val < 100: # FIX 2: Sterge daca scade sub 100 (inclusiv merge)
                             if pos_key in global_state["session_accumulated"]:
                                 del global_state["session_accumulated"][pos_key]
                         else:
@@ -769,7 +773,7 @@ def bot_loop():
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 
-                                # FIX 1: CHECK OPPOSITE SIDE (HEDGE ALERT)
+                                # CHECK OPPOSITE SIDE (HEDGE ALERT)
                                 opp_outcome = "NO" if outcome == "YES" else "YES"
                                 opp_key = f"{name}|{title}|{opp_outcome}"
                                 if global_state["positions"].get(opp_key, 0) > 1000:
@@ -780,7 +784,6 @@ def bot_loop():
 
                         elif action == "sell":
                             held_val = global_state["positions"].get(pos_key, 0)
-                            # Actualizare holding pt procentaj
                             total_stack_estimated = max(held_val, val)
                             global_state["positions"][pos_key] = max(total_stack_estimated - val, 0)
                             
@@ -805,7 +808,7 @@ def bot_loop():
 
                             if val >= CURRENT_ALERT_LIMIT:
                                 pp_warn = "⚡ <b>PING-PONG</b>" if is_ping_pong else ""
-                                if is_merge_event: pp_warn += "\n⚠️ <b>MERGE / HEDGE</b> (Fake Buy)"
+                                if is_merge_event: pp_warn += "\n⚠️ <b>MERGE (EXIT)</b>"
 
                                 exit_str = f"📉 Vândut: <b>{pct_sold:.0f}%</b>"
                                 if entry_price > 0: 
@@ -825,19 +828,16 @@ def bot_loop():
 
                     # === CLUSTER LOGIC FIXED ===
                     if c_valid_count >= 2:
-                        # FIX 3: Check timestamp to avoid spamming "Formed" for old clusters
-                        is_new_cluster = False
-                        if market_key not in global_state["cluster_created_at"]:
+                        # FIX 3: Check SENT LIST to allow "Formed" only once per session
+                        if market_key not in global_state["clusters_sent"]:
                             if c_total >= MINI_CLUSTER_ALERT and action == "buy":
                                 global_state["cluster_created_at"][market_key] = time.time()
                                 global_state["clusters_sent"][market_key] = c_total
-                                is_new_cluster = True
                                 
-                                # Send ALERT only if new in this session
                                 breakdown_str = "\n".join(c_breakdown_list)
                                 tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                         else:
-                            # FIX 4: Correct Diff Calculation Logic
+                            # FIX 4: Correct Difference Calculation
                             last_sent = global_state["clusters_sent"].get(market_key, 0)
                             diff = c_total - last_sent
                             
