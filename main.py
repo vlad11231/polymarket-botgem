@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL DIAMOND v10"
+# 1. CONFIGURARE "FINAL DIAMOND v11"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Diamond v10</title>
+    <title>PolyBot Diamond v11</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -356,7 +356,6 @@ def index():
         if time.time() - start_ts > 172800: 
             continue 
 
-        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -597,7 +596,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: MERGE Value=Size\nFix: Cluster Formed Logic (New Only)\nFix: Dashboard Cleanup") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Cluster Formed (Existing Suppressed)\nFix: Merge Cleanup") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -644,13 +643,10 @@ def bot_loop():
                     event_side = e.get("side", "BUY").upper()
                     action = "sell" if event_side == "SELL" else "buy"
                     
-                    # FIX 1: MERGE VALUE
                     if event_type in ["MERGE", "REDEMPTION"]:
                         is_merge_event = True
                         action = "sell" 
-                        # La merge, valoarea in dolari e egala cu size (1 set = $1)
-                        # API returneaza uneori value=0, asa ca luam size
-                        val = float(e.get("size", 0))
+                        val = float(e.get("size", 0)) # MERGE VALUE FIX
                     else:
                         val = get_usd(e)
 
@@ -687,7 +683,7 @@ def bot_loop():
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
                         new_sess_val = max(0, current_sess - val)
-                        if new_sess_val < 100: # FIX 2: Sterge daca scade sub 100 (inclusiv merge)
+                        if new_sess_val < 100: # Cleanup
                             if pos_key in global_state["session_accumulated"]:
                                 del global_state["session_accumulated"][pos_key]
                         else:
@@ -773,7 +769,6 @@ def bot_loop():
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 
-                                # CHECK OPPOSITE SIDE (HEDGE ALERT)
                                 opp_outcome = "NO" if outcome == "YES" else "YES"
                                 opp_key = f"{name}|{title}|{opp_outcome}"
                                 if global_state["positions"].get(opp_key, 0) > 1000:
@@ -828,22 +823,22 @@ def bot_loop():
 
                     # === CLUSTER LOGIC FIXED ===
                     if c_valid_count >= 2:
-                        # FIX 3: Check SENT LIST to allow "Formed" only once per session
-                        if market_key not in global_state["clusters_sent"]:
-                            if c_total >= MINI_CLUSTER_ALERT and action == "buy":
+                        if market_key not in global_state["cluster_created_at"]:
+                            if c_total >= MINI_CLUSTER_ALERT:
+                                # Mark as existing
                                 global_state["cluster_created_at"][market_key] = time.time()
                                 global_state["clusters_sent"][market_key] = c_total
                                 
-                                breakdown_str = "\n".join(c_breakdown_list)
-                                tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                # FIX: Check if it was already huge before this buy
+                                prev_total = c_total - val
+                                if prev_total < MINI_CLUSTER_ALERT and action == "buy":
+                                    breakdown_str = "\n".join(c_breakdown_list)
+                                    tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                         else:
-                            # FIX 4: Correct Difference Calculation
                             last_sent = global_state["clusters_sent"].get(market_key, 0)
                             diff = c_total - last_sent
                             
-                            # Update only if valid currently
                             if c_total >= MINI_CLUSTER_ALERT:
-                                # Trigger Increase/Decrease only on significant change
                                 if abs(diff) >= CLUSTER_CHANGE_THRESHOLD:
                                     breakdown_str = "\n".join(c_breakdown_list)
                                     if diff > 0:
@@ -851,10 +846,8 @@ def bot_loop():
                                     else:
                                         tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                                     
-                                    # Update last_sent to current
                                     global_state["clusters_sent"][market_key] = c_total
                             
-                            # Check Broken
                             elif last_sent >= MINI_CLUSTER_ALERT and c_total < MINI_CLUSTER_ALERT:
                                  tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
                                  global_state["clusters_sent"][market_key] = c_total 
