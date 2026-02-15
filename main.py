@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "CLEAN DASHBOARD v12"
+# 1. CONFIGURARE "ERROR FREE v13"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Clean v12</title>
+    <title>PolyBot Clean v13</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -322,8 +322,8 @@ def index():
                 continue 
 
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
-                # FILTRU 2: Daca valoarea curenta a pozitiei e 0 (au pierdut tot sau au vandut), ignoram in cluster
-                current_holding_val = global_state["positions"].get(pos_key, 0)
+                # FILTRU 2 (FIXED): pos_k vs pos_key
+                current_holding_val = global_state["positions"].get(pos_k, 0) # AICI ERA EROAREA
                 if current_holding_val < 100: 
                     continue
 
@@ -610,7 +610,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Ghost Clusters (Empty Side)\nFix: Dead Markets (Zero Value Cleanup)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: DASHBOARD ERROR 500 (NameError Fixed)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -688,7 +688,7 @@ def bot_loop():
                             try: user_holding_val = float(my_p['value'])
                             except: user_holding_val = 0.0
 
-                    # DASHBOARD SESSION LOGIC
+                    # DASHBOARD SESSION LOGIC + CLEANUP
                     if action == "buy":
                         if market_key not in global_state["session_start_times"]:
                             global_state["session_start_times"][market_key] = time.time()
@@ -835,22 +835,19 @@ def bot_loop():
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
                                 alert_sent = True
 
-                    # === CLUSTER LOGIC ===
+                    # === CLUSTER LOGIC FIXED ===
                     if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if c_total >= MINI_CLUSTER_ALERT:
-                                # FIX: Prevent "Formed" if it was already huge before
-                                # Only trigger if THIS buy pushed it over the edge
+                                # Mark as existing
+                                global_state["cluster_created_at"][market_key] = time.time()
+                                global_state["clusters_sent"][market_key] = c_total
+                                
+                                # FIX: Check if it was already huge before this buy
                                 prev_total = c_total - val
                                 if prev_total < MINI_CLUSTER_ALERT and action == "buy":
-                                    global_state["cluster_created_at"][market_key] = time.time()
-                                    global_state["clusters_sent"][market_key] = c_total
                                     breakdown_str = "\n".join(c_breakdown_list)
                                     tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
-                                else:
-                                    # Just memorize it silently
-                                    global_state["cluster_created_at"][market_key] = time.time()
-                                    global_state["clusters_sent"][market_key] = c_total
                         else:
                             last_sent = global_state["clusters_sent"].get(market_key, 0)
                             diff = c_total - last_sent
