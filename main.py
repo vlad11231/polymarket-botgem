@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "FINAL DIAMOND v11"
+# 1. CONFIGURARE "CLEAN DASHBOARD v12"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Diamond v11</title>
+    <title>PolyBot Clean v12</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -316,7 +316,17 @@ def index():
         total = 0
         user_totals = {}
         for pos_k, val in global_state["session_accumulated"].items():
+            # FILTRU 1: Verifica daca e "Fantoma" (fara YES/NO)
+            parts = pos_k.split("|")
+            if len(parts) < 3 or not parts[2]: 
+                continue 
+
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
+                # FILTRU 2: Daca valoarea curenta a pozitiei e 0 (au pierdut tot sau au vandut), ignoram in cluster
+                current_holding_val = global_state["positions"].get(pos_key, 0)
+                if current_holding_val < 100: 
+                    continue
+
                 total += val
                 name = pos_k.split("|")[0]
                 user_totals[name] = user_totals.get(name, 0) + val
@@ -349,13 +359,16 @@ def index():
     unique_session = set()
     for pos_k in global_state["session_accumulated"]:
         parts = pos_k.split("|")
-        if len(parts) == 3: unique_session.add(f"{parts[1]}|{parts[2]}")
+        # Filtru strict pentru chei valide
+        if len(parts) == 3 and parts[2]: 
+            unique_session.add(f"{parts[1]}|{parts[2]}")
     
     for key in unique_session:
         start_ts = global_state["session_start_times"].get(key, time.time())
         if time.time() - start_ts > 172800: 
             continue 
 
+        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -369,7 +382,8 @@ def index():
     unique_all = set()
     for pos_k in global_state["positions"]:
         parts = pos_k.split("|")
-        if len(parts) == 3: unique_all.add(f"{parts[1]}|{parts[2]}")
+        if len(parts) == 3 and parts[2]: 
+            unique_all.add(f"{parts[1]}|{parts[2]}")
         
     for key in unique_all:
         vol, parts = get_cluster_data_all_time(key)
@@ -596,7 +610,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Cluster Formed (Existing Suppressed)\nFix: Merge Cleanup") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Ghost Clusters (Empty Side)\nFix: Dead Markets (Zero Value Cleanup)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -646,7 +660,7 @@ def bot_loop():
                     if event_type in ["MERGE", "REDEMPTION"]:
                         is_merge_event = True
                         action = "sell" 
-                        val = float(e.get("size", 0)) # MERGE VALUE FIX
+                        val = float(e.get("size", 0)) 
                     else:
                         val = get_usd(e)
 
@@ -674,7 +688,7 @@ def bot_loop():
                             try: user_holding_val = float(my_p['value'])
                             except: user_holding_val = 0.0
 
-                    # DASHBOARD SESSION LOGIC + CLEANUP
+                    # DASHBOARD SESSION LOGIC
                     if action == "buy":
                         if market_key not in global_state["session_start_times"]:
                             global_state["session_start_times"][market_key] = time.time()
@@ -683,7 +697,7 @@ def bot_loop():
                     elif action == "sell":
                         current_sess = global_state["session_accumulated"].get(pos_key, 0)
                         new_sess_val = max(0, current_sess - val)
-                        if new_sess_val < 100: # Cleanup
+                        if new_sess_val < 100: 
                             if pos_key in global_state["session_accumulated"]:
                                 del global_state["session_accumulated"][pos_key]
                         else:
@@ -821,19 +835,22 @@ def bot_loop():
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
                                 alert_sent = True
 
-                    # === CLUSTER LOGIC FIXED ===
+                    # === CLUSTER LOGIC ===
                     if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if c_total >= MINI_CLUSTER_ALERT:
-                                # Mark as existing
-                                global_state["cluster_created_at"][market_key] = time.time()
-                                global_state["clusters_sent"][market_key] = c_total
-                                
-                                # FIX: Check if it was already huge before this buy
+                                # FIX: Prevent "Formed" if it was already huge before
+                                # Only trigger if THIS buy pushed it over the edge
                                 prev_total = c_total - val
                                 if prev_total < MINI_CLUSTER_ALERT and action == "buy":
+                                    global_state["cluster_created_at"][market_key] = time.time()
+                                    global_state["clusters_sent"][market_key] = c_total
                                     breakdown_str = "\n".join(c_breakdown_list)
                                     tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                else:
+                                    # Just memorize it silently
+                                    global_state["cluster_created_at"][market_key] = time.time()
+                                    global_state["clusters_sent"][market_key] = c_total
                         else:
                             last_sent = global_state["clusters_sent"].get(market_key, 0)
                             diff = c_total - last_sent
