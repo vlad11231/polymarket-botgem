@@ -304,6 +304,10 @@ def index():
         user_totals = {}
         for pos_k, val in global_state["positions"].items():
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
+                # FIX AICI PENTRU ALL TIME - CHECK IF SOLD
+                current_holding_val = global_state["positions"].get(pos_k, 0)
+                if current_holding_val < 100: continue
+
                 total += val
                 name = pos_k.split("|")[0]
                 user_totals[name] = user_totals.get(name, 0) + val
@@ -322,8 +326,8 @@ def index():
                 continue 
 
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
-                # FILTRU 2 (FIXED): pos_k vs pos_key
-                current_holding_val = global_state["positions"].get(pos_k, 0) # AICI ERA EROAREA
+                # FILTRU 2 (FIXED TYPO): pos_k in loc de pos_key
+                current_holding_val = global_state["positions"].get(pos_k, 0) 
                 if current_holding_val < 100: 
                     continue
 
@@ -839,15 +843,18 @@ def bot_loop():
                     if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if c_total >= MINI_CLUSTER_ALERT:
-                                # Mark as existing
-                                global_state["cluster_created_at"][market_key] = time.time()
-                                global_state["clusters_sent"][market_key] = c_total
-                                
-                                # FIX: Check if it was already huge before this buy
+                                # FIX: Prevent "Formed" if it was already huge before
+                                # Only trigger if THIS buy pushed it over the edge
                                 prev_total = c_total - val
                                 if prev_total < MINI_CLUSTER_ALERT and action == "buy":
+                                    global_state["cluster_created_at"][market_key] = time.time()
+                                    global_state["clusters_sent"][market_key] = c_total
                                     breakdown_str = "\n".join(c_breakdown_list)
                                     tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                else:
+                                    # Just memorize it silently
+                                    global_state["cluster_created_at"][market_key] = time.time()
+                                    global_state["clusters_sent"][market_key] = c_total
                         else:
                             last_sent = global_state["clusters_sent"].get(market_key, 0)
                             diff = c_total - last_sent
