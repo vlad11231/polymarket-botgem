@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ERROR FREE v13"
+# 1. CONFIGURARE "ULTRA NET v14"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Clean v13</title>
+    <title>PolyBot Ultra Net v14</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -228,7 +228,7 @@ HTML_TEMPLATE = """
     <div class="card" style="border: 1px solid #fdcb6e;">
         <h3>⚡ Active Session Clusters (Recente &lt; 2 Zile)</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Traderi (Sesiune)</th><th>Total Sesiune ($)</th><th>Preț</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Traderi (Sesiune)</th><th>Total Sesiune Net ($)</th><th>Preț</th></tr></thead>
             <tbody>
                 {% for c in session_clusters %}
                 <tr>
@@ -249,9 +249,9 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card">
-        <h3>💰 All-Time Clusters (Total Dețineri)</h3>
+        <h3>💰 All-Time Clusters (Total Dețineri Nete)</h3>
         <table>
-            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total All-Time ($)</th><th>Preț</th></tr></thead>
+            <thead><tr><th>Piață</th><th>Side</th><th>Participanți (Min 2)</th><th>Total All-Time Net ($)</th><th>Preț</th></tr></thead>
             <tbody>
                 {% for c in all_shared %}
                 <tr>
@@ -302,41 +302,68 @@ def index():
     def get_cluster_data_all_time(key):
         total = 0
         user_totals = {}
+        parts_key = key.split("|")
+        if len(parts_key) != 2: return 0, []
+        title_c = parts_key[0]
+        outcome_c = parts_key[1]
+        opp_outcome_c = "NO" if outcome_c == "YES" else "YES"
+        
         for pos_k, val in global_state["positions"].items():
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
-                # FIX AICI PENTRU ALL TIME - CHECK IF SOLD
-                current_holding_val = global_state["positions"].get(pos_k, 0)
-                if current_holding_val < 100: continue
+                u_name = pos_k.split("|")[0]
+                
+                # NET LOGIC: Subtract opposite position value
+                opp_pos_k = f"{u_name}|{title_c}|{opp_outcome_c}"
+                opp_val = global_state["positions"].get(opp_pos_k, 0)
+                
+                net_val = val - opp_val
+                if net_val >= 100: 
+                    user_totals[u_name] = user_totals.get(u_name, 0) + net_val
 
-                total += val
-                name = pos_k.split("|")[0]
-                user_totals[name] = user_totals.get(name, 0) + val
         valid = []
         for n, v in user_totals.items():
-            if v >= MIN_TRADER_DISPLAY: valid.append((n, v))
+            if v >= MIN_TRADER_DISPLAY: 
+                valid.append((n, v))
+                total += v
         return total, valid
 
     def get_cluster_data_session(key):
         total = 0
         user_totals = {}
+        parts_key = key.split("|")
+        if len(parts_key) != 2: return 0, []
+        title_c = parts_key[0]
+        outcome_c = parts_key[1]
+        opp_outcome_c = "NO" if outcome_c == "YES" else "YES"
+        
         for pos_k, val in global_state["session_accumulated"].items():
-            # FILTRU 1: Verifica daca e "Fantoma" (fara YES/NO)
             parts = pos_k.split("|")
-            if len(parts) < 3 or not parts[2]: 
-                continue 
+            if len(parts) < 3 or not parts[2]: continue 
 
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
-                # FILTRU 2 (FIXED TYPO): pos_k in loc de pos_key
+                u_name = parts[0]
+                
+                # NET LOGIC pentru current holding ca sa nu afiseze "pierdute/ghosts"
                 current_holding_val = global_state["positions"].get(pos_k, 0) 
-                if current_holding_val < 100: 
+                opp_pos_k = f"{u_name}|{title_c}|{opp_outcome_c}"
+                opp_holding_val = global_state["positions"].get(opp_pos_k, 0)
+                
+                if (current_holding_val - opp_holding_val) < 100: 
                     continue
 
-                total += val
-                name = pos_k.split("|")[0]
-                user_totals[name] = user_totals.get(name, 0) + val
+                # NET LOGIC pentru acumularea din sesiune
+                opp_sess_k = f"{u_name}|{title_c}|{opp_outcome_c}"
+                opp_sess_val = global_state["session_accumulated"].get(opp_sess_k, 0)
+                net_sess = val - opp_sess_val
+
+                if net_sess >= 100:
+                    user_totals[u_name] = user_totals.get(u_name, 0) + net_sess
+
         valid = []
         for n, v in user_totals.items():
-            if v >= MIN_TRADER_DISPLAY: valid.append((n, v))
+            if v >= MIN_TRADER_DISPLAY: 
+                valid.append((n, v))
+                total += v
         return total, valid
 
     recs = []
@@ -363,7 +390,6 @@ def index():
     unique_session = set()
     for pos_k in global_state["session_accumulated"]:
         parts = pos_k.split("|")
-        # Filtru strict pentru chei valide
         if len(parts) == 3 and parts[2]: 
             unique_session.add(f"{parts[1]}|{parts[2]}")
     
@@ -372,7 +398,6 @@ def index():
         if time.time() - start_ts > 172800: 
             continue 
 
-        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -614,7 +639,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: DASHBOARD ERROR 500 (NameError Fixed)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Mismatch Sum (NET Calculator Active)\nFix: Hedge Alert ($500 for Opposite Side)") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -658,6 +683,8 @@ def bot_loop():
                     event_type = e.get("type", "TRADE")
                     
                     outcome = e.get("outcome", "YES").upper()
+                    opp_outcome = "NO" if outcome == "YES" else "YES"
+                    
                     event_side = e.get("side", "BUY").upper()
                     action = "sell" if event_side == "SELL" else "buy"
                     
@@ -671,6 +698,7 @@ def bot_loop():
                     price = float(e.get("price", 0))
                     
                     pos_key = f"{name}|{title}|{outcome}"
+                    opp_key = f"{name}|{title}|{opp_outcome}"
                     market_key = f"{title}|{outcome}"
                     
                     if price > 0: global_state["market_prices"][market_key] = price
@@ -678,19 +706,28 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
+                    # VERIFICARE PORTFOLIU PROPRIU SI HEDGE ALERT
                     CURRENT_ALERT_LIMIT = MIN_BUY_ALERT
                     holding_warning = ""
                     is_holding_flag = False
                     user_holding_val = 0.0 
+                    my_held_outcome = ""
                     
                     for my_p in global_state["my_portfolio"]:
                         if my_p['title'] == title:
-                            holding_warning = " | ⚠️ DEȚII ASTA!"
-                            holding_warning_alert = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
                             is_holding_flag = True
-                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT
+                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT # Scade mereu limita la 500
+                            my_held_outcome = my_p['outcome']
                             try: user_holding_val = float(my_p['value'])
                             except: user_holding_val = 0.0
+                            
+                            holding_warning = " | ⚠️ DEȚII ASTA!"
+                            
+                            # HEDGE ALERT PENTRU TINE: Daca el ia opusul a ce ai tu
+                            if action == "buy" and outcome != my_held_outcome:
+                                holding_warning_alert = f"\n⚠️ <b>ATENȚIE: TU AI {my_held_outcome}, EL CUMPĂRĂ {outcome}! (Hedge/Merge)</b>"
+                            else:
+                                holding_warning_alert = "\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
 
                     # DASHBOARD SESSION LOGIC + CLEANUP
                     if action == "buy":
@@ -725,16 +762,26 @@ def bot_loop():
                         tg(f"🐳 <b>WHALE ACCUMULATION (Net 3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 Net: <b>${net_accumulated:,.0f}</b>")
                         global_state["last_accum_alert"][alert_key] = time.time()
 
+                    # CLUSTER LOGIC - NET CALCULATOR PENTRU TELEGRAM ALERT
                     cluster_users_sum = {}
                     cluster_users_entry = {}
                     cluster_sum = 0
+                    
                     for k, v in global_state["positions"].items():
                         if market_key in k and not k.startswith(SELF):
-                            cluster_sum += v
                             u_name = k.split("|")[0]
-                            cluster_users_sum[u_name] = cluster_users_sum.get(u_name, 0) + v
-                            entry = global_state["trader_entries"].get(k, 0)
-                            if entry > 0: cluster_users_entry[u_name] = entry
+                            
+                            # NET LOGIC pentru participant
+                            opp_pos_k = f"{u_name}|{title}|{opp_outcome}"
+                            opp_val = global_state["positions"].get(opp_pos_k, 0)
+                            
+                            net_v = v - opp_val
+                            
+                            if net_v >= MIN_TRADER_DISPLAY:
+                                cluster_sum += net_v
+                                cluster_users_sum[u_name] = net_v
+                                entry = global_state["trader_entries"].get(k, 0)
+                                if entry > 0: cluster_users_entry[u_name] = entry
                     
                     c_total = cluster_sum
                     
@@ -762,6 +809,11 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
 
+                    # CALCUL NET PENTRU ALERTA TELEGRAM INDIVIDUALA
+                    current_holding_gross = global_state["positions"].get(pos_key, 0)
+                    opp_holding_gross = global_state["positions"].get(opp_key, 0)
+                    net_current_holding = max(0, current_holding_gross - opp_holding_gross)
+
                     # ALERTE INDIVIDUALE
                     alert_sent = False
                     if name == SELF:
@@ -781,18 +833,21 @@ def bot_loop():
                         if action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
-                            current_holding = global_state["positions"][pos_key]
+                            
+                            # Recalculate NET holding for accurate message
+                            current_holding_gross = global_state["positions"].get(pos_key, 0)
+                            opp_holding_gross = global_state["positions"].get(opp_key, 0)
+                            net_current_holding = max(0, current_holding_gross - opp_holding_gross)
 
                             if val >= CURRENT_ALERT_LIMIT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 
-                                opp_outcome = "NO" if outcome == "YES" else "YES"
-                                opp_key = f"{name}|{title}|{opp_outcome}"
-                                if global_state["positions"].get(opp_key, 0) > 1000:
-                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține ${global_state['positions'][opp_key]:.0f} pe {opp_outcome}!"
+                                # HEDGE ALERT: Daca cumpara dar are si pe partea cealalta (cand NU detii tu)
+                                if opp_holding_gross > 1000 and not is_holding_flag:
+                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține ${opp_holding_gross:.0f} pe {opp_outcome}!"
 
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${net_current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
                                 alert_sent = True
 
                         elif action == "sell":
@@ -830,7 +885,7 @@ def bot_loop():
                                     exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢"
                                 
                                 alert_extra = ""
-                                if is_holding_flag:
+                                if is_holding_flag and my_held_outcome == outcome: # Doar daca vinzi ce ai si tu
                                     rec_sell_amt = user_holding_val * (pct_sold / 100.0)
                                     alert_extra = f"\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
                                     if rec_sell_amt > 10:
@@ -841,18 +896,15 @@ def bot_loop():
 
                     # === CLUSTER LOGIC FIXED ===
                     if c_valid_count >= 2:
-                        if market_key not in global_state["cluster_created_at"]:
+                        if market_key not in global_state["clusters_sent"]:
                             if c_total >= MINI_CLUSTER_ALERT:
-                                # FIX: Prevent "Formed" if it was already huge before
-                                # Only trigger if THIS buy pushed it over the edge
                                 prev_total = c_total - val
                                 if prev_total < MINI_CLUSTER_ALERT and action == "buy":
                                     global_state["cluster_created_at"][market_key] = time.time()
                                     global_state["clusters_sent"][market_key] = c_total
                                     breakdown_str = "\n".join(c_breakdown_list)
-                                    tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                    tg(f"🚨 <b>CLUSTER FORMED</b>\n🏆 {title}\n💰 Total Net: ${c_total:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                                 else:
-                                    # Just memorize it silently
                                     global_state["cluster_created_at"][market_key] = time.time()
                                     global_state["clusters_sent"][market_key] = c_total
                         else:
@@ -863,14 +915,14 @@ def bot_loop():
                                 if abs(diff) >= CLUSTER_CHANGE_THRESHOLD:
                                     breakdown_str = "\n".join(c_breakdown_list)
                                     if diff > 0:
-                                        tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                        tg(f"📊 <b>CLUSTER INCREASE</b>\n🏆 {title}\n💰 Total Net: ${c_total:,.0f}\n📈 A crescut cu: ${diff:,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                                     else:
-                                        tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
+                                        tg(f"📉 <b>CLUSTER DECREASE</b>\n🏆 {title}\n💰 Total Net Rămas: ${c_total:,.0f}\n📉 A scăzut cu: ${abs(diff):,.0f}\n👥 <b>Participanți:</b>\n{breakdown_str}")
                                     
                                     global_state["clusters_sent"][market_key] = c_total
                             
                             elif last_sent >= MINI_CLUSTER_ALERT and c_total < MINI_CLUSTER_ALERT:
-                                 tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total sub limită: ${c_total:,.0f}")
+                                 tg(f"💔 <b>CLUSTER BROKEN</b>\n🏆 {title}\n💰 Total Net sub limită: ${c_total:,.0f}")
                                  global_state["clusters_sent"][market_key] = c_total 
 
                     if val >= MIN_DASHBOARD_LOG:
