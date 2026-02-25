@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ULTRA NET v14"
+# 1. CONFIGURARE "ULTRA NET FINAL"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Ultra Net v14</title>
+    <title>PolyBot Ultra Net Final</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -390,6 +390,7 @@ def index():
     unique_session = set()
     for pos_k in global_state["session_accumulated"]:
         parts = pos_k.split("|")
+        # Filtru strict pentru chei valide
         if len(parts) == 3 and parts[2]: 
             unique_session.add(f"{parts[1]}|{parts[2]}")
     
@@ -398,6 +399,7 @@ def index():
         if time.time() - start_ts > 172800: 
             continue 
 
+        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -885,7 +887,7 @@ def bot_loop():
                                     exit_str += f"\n🚪 Ieșire: {price*100:.1f}¢"
                                 
                                 alert_extra = ""
-                                if is_holding_flag and my_held_outcome == outcome: # Doar daca vinzi ce ai si tu
+                                if is_holding_flag and my_held_outcome == outcome: 
                                     rec_sell_amt = user_holding_val * (pct_sold / 100.0)
                                     alert_extra = f"\n⚠️ <b>ATENȚIE: DEȚII ȘI TU ASTA!</b>"
                                     if rec_sell_amt > 10:
@@ -896,7 +898,7 @@ def bot_loop():
 
                     # === CLUSTER LOGIC FIXED ===
                     if c_valid_count >= 2:
-                        if market_key not in global_state["clusters_sent"]:
+                        if market_key not in global_state["cluster_created_at"]:
                             if c_total >= MINI_CLUSTER_ALERT:
                                 prev_total = c_total - val
                                 if prev_total < MINI_CLUSTER_ALERT and action == "buy":
