@@ -641,7 +641,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Mismatch Sum (NET Calculator Active)\nFix: Hedge Alert ($500 for Opposite Side)") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Telegram Alert Total (Gross values)\nFix: Hedge Alert Condition Removed") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -811,11 +811,6 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
 
-                    # CALCUL NET PENTRU ALERTA TELEGRAM INDIVIDUALA
-                    current_holding_gross = global_state["positions"].get(pos_key, 0)
-                    opp_holding_gross = global_state["positions"].get(opp_key, 0)
-                    net_current_holding = max(0, current_holding_gross - opp_holding_gross)
-
                     # ALERTE INDIVIDUALE
                     alert_sent = False
                     if name == SELF:
@@ -836,20 +831,19 @@ def bot_loop():
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
                             
-                            # Recalculate NET holding for accurate message
+                            # VALOARE BRUTA CURENTA PE PARTEA CUMPARATA
                             current_holding_gross = global_state["positions"].get(pos_key, 0)
                             opp_holding_gross = global_state["positions"].get(opp_key, 0)
-                            net_current_holding = max(0, current_holding_gross - opp_holding_gross)
 
                             if val >= CURRENT_ALERT_LIMIT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 
-                                # HEDGE ALERT: Daca cumpara dar are si pe partea cealalta (cand NU detii tu)
-                                if opp_holding_gross > 1000 and not is_holding_flag:
-                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține ${opp_holding_gross:.0f} pe {opp_outcome}!"
+                                # HEDGE ALERT: Modificat sa apara mereu (fie ca detii tu sau nu)
+                                if opp_holding_gross > 500:
+                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține și ${opp_holding_gross:.0f} pe {opp_outcome}!"
 
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${net_current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total pe {outcome}: <b>${current_holding_gross:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
                                 alert_sent = True
 
                         elif action == "sell":
