@@ -9,7 +9,7 @@ import pytz
 from flask import Flask, render_template_string
 
 # ==========================================
-# 1. CONFIGURARE "ULTRA NET FINAL"
+# 1. CONFIGURARE "SUPREME CLEAN v15"
 # ==========================================
 
 BOT_TOKEN = "8261089656:AAF_JM39II4DpfiFzVTd0zsXZKtKcDE5G9A" 
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PolyBot Ultra Net Final</title>
+    <title>PolyBot Supreme v15</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f111a; color: #e0e0e0; padding: 20px; }
@@ -312,7 +312,6 @@ def index():
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
                 u_name = pos_k.split("|")[0]
                 
-                # NET LOGIC: Subtract opposite position value
                 opp_pos_k = f"{u_name}|{title_c}|{opp_outcome_c}"
                 opp_val = global_state["positions"].get(opp_pos_k, 0)
                 
@@ -343,7 +342,6 @@ def index():
             if f"{key}" in pos_k and not pos_k.startswith(SELF):
                 u_name = parts[0]
                 
-                # NET LOGIC pentru current holding ca sa nu afiseze "pierdute/ghosts"
                 current_holding_val = global_state["positions"].get(pos_k, 0) 
                 opp_pos_k = f"{u_name}|{title_c}|{opp_outcome_c}"
                 opp_holding_val = global_state["positions"].get(opp_pos_k, 0)
@@ -351,7 +349,6 @@ def index():
                 if (current_holding_val - opp_holding_val) < 100: 
                     continue
 
-                # NET LOGIC pentru acumularea din sesiune
                 opp_sess_k = f"{u_name}|{title_c}|{opp_outcome_c}"
                 opp_sess_val = global_state["session_accumulated"].get(opp_sess_k, 0)
                 net_sess = val - opp_sess_val
@@ -390,7 +387,6 @@ def index():
     unique_session = set()
     for pos_k in global_state["session_accumulated"]:
         parts = pos_k.split("|")
-        # Filtru strict pentru chei valide
         if len(parts) == 3 and parts[2]: 
             unique_session.add(f"{parts[1]}|{parts[2]}")
     
@@ -399,7 +395,6 @@ def index():
         if time.time() - start_ts > 172800: 
             continue 
 
-        # Dashboard vede clustere daca sunt > 6000
         vol, parts = get_cluster_data_session(key)
         if len(parts) >= 2 and vol >= 6000:  
             p_live = global_state['market_prices'].get(key, 0.5)
@@ -490,6 +485,8 @@ def sync_trader_positions():
             r = requests.get(API_POSITIONS, params={"user": addr}, timeout=5)
             if r.status_code == 200:
                 resp = r.json()
+                seen_keys = set() # NEW: Tinem minte ce pozitii active are ACUM
+                
                 for item in resp:
                     size = safe_float(item.get("size"))
                     if size < 5: continue
@@ -499,13 +496,25 @@ def sync_trader_positions():
                     if p == 0: p = get_real_price(item.get("asset"))
                     if p == 0: p = safe_float(item.get("avgBuyPrice"))
                     val = size * p
+                    
                     pos_key = f"{name}|{title}|{outcome}"
+                    seen_keys.add(pos_key)
+                    
                     global_state["positions"][pos_key] = val
                     if p > 0: global_state["market_prices"][f"{title}|{outcome}"] = p
                     
                     entry = safe_float(item.get("avgBuyPrice"))
                     if entry > 0: 
                         global_state["trader_entries"][pos_key] = entry
+                
+                # CLEANUP GHOST POSITIONS (Sterge din memorie pozitiile pierdute/vandute complet)
+                keys_to_reset = []
+                for k in global_state["positions"].keys():
+                    if k.startswith(f"{name}|") and k not in seen_keys:
+                        keys_to_reset.append(k)
+                for k in keys_to_reset:
+                    global_state["positions"][k] = 0
+                    
         except: pass
         time.sleep(1)
 
@@ -641,7 +650,7 @@ def check_nightly_summary():
 def bot_loop():
     load()
     print("Bot loop started.")
-    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Telegram Alert Total (Gross values)\nFix: Hedge Alert Condition Removed") 
+    tg("✅ <b>SYSTEM RESTARTED</b>\nFix: Ghost Positions Deleted ($0 Fix)\nFix: CONVERT/SPLIT Alert Handled") 
     
     sync_trader_positions()
     sync_portfolio()
@@ -682,7 +691,8 @@ def bot_loop():
                     if not title or title.strip() == "": continue 
                     
                     is_merge_event = False
-                    event_type = e.get("type", "TRADE")
+                    is_convert_event = False
+                    event_type = e.get("type", "TRADE").upper()
                     
                     outcome = e.get("outcome", "YES").upper()
                     opp_outcome = "NO" if outcome == "YES" else "YES"
@@ -690,10 +700,15 @@ def bot_loop():
                     event_side = e.get("side", "BUY").upper()
                     action = "sell" if event_side == "SELL" else "buy"
                     
+                    # LOGICA PENTRU TIPURI DE TRANZACTII
                     if event_type in ["MERGE", "REDEMPTION"]:
                         is_merge_event = True
                         action = "sell" 
                         val = float(e.get("size", 0)) 
+                    elif event_type in ["CONVERT", "SPLIT"]:
+                        is_convert_event = True
+                        action = "buy" # Il tratam ca interactiune pe piata, dar dam alerta custom
+                        val = float(e.get("size", 0))
                     else:
                         val = get_usd(e)
 
@@ -708,7 +723,6 @@ def bot_loop():
                     now_h = datetime.now(RO).hour
                     is_night = (now_h >= 22 or now_h < 7)
 
-                    # VERIFICARE PORTFOLIU PROPRIU SI HEDGE ALERT
                     CURRENT_ALERT_LIMIT = MIN_BUY_ALERT
                     holding_warning = ""
                     is_holding_flag = False
@@ -718,14 +732,13 @@ def bot_loop():
                     for my_p in global_state["my_portfolio"]:
                         if my_p['title'] == title:
                             is_holding_flag = True
-                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT # Scade mereu limita la 500
+                            CURRENT_ALERT_LIMIT = MIN_HOLDING_ALERT 
                             my_held_outcome = my_p['outcome']
                             try: user_holding_val = float(my_p['value'])
                             except: user_holding_val = 0.0
                             
                             holding_warning = " | ⚠️ DEȚII ASTA!"
                             
-                            # HEDGE ALERT PENTRU TINE: Daca el ia opusul a ce ai tu
                             if action == "buy" and outcome != my_held_outcome:
                                 holding_warning_alert = f"\n⚠️ <b>ATENȚIE: TU AI {my_held_outcome}, EL CUMPĂRĂ {outcome}! (Hedge/Merge)</b>"
                             else:
@@ -764,7 +777,7 @@ def bot_loop():
                         tg(f"🐳 <b>WHALE ACCUMULATION (Net 3 Days)</b>\n👤 {name}\n🏆 {title}\n💰 Net: <b>${net_accumulated:,.0f}</b>")
                         global_state["last_accum_alert"][alert_key] = time.time()
 
-                    # CLUSTER LOGIC - NET CALCULATOR PENTRU TELEGRAM ALERT
+                    # CLUSTER LOGIC - NET CALCULATOR
                     cluster_users_sum = {}
                     cluster_users_entry = {}
                     cluster_sum = 0
@@ -773,10 +786,8 @@ def bot_loop():
                         if market_key in k and not k.startswith(SELF):
                             u_name = k.split("|")[0]
                             
-                            # NET LOGIC pentru participant
                             opp_pos_k = f"{u_name}|{title}|{opp_outcome}"
                             opp_val = global_state["positions"].get(opp_pos_k, 0)
-                            
                             net_v = v - opp_val
                             
                             if net_v >= MIN_TRADER_DISPLAY:
@@ -811,8 +822,13 @@ def bot_loop():
                     side_emoji = "🟢" if "YES" in outcome else "🔴"
                     side_formatted = f"{side_emoji} <b>{outcome}</b>"
 
-                    # ALERTE INDIVIDUALE
+                    current_holding_gross = global_state["positions"].get(pos_key, 0)
+                    opp_holding_gross = global_state["positions"].get(opp_key, 0)
+                    net_current_holding = max(0, current_holding_gross - opp_holding_gross)
+
+                    # === ALERTE TELEGRAM ===
                     alert_sent = False
+                    
                     if name == SELF:
                         if action == "buy":
                             tg(f"🔔 <b>AI CUMPĂRAT {side_formatted}</b>\n🏆 {title}\n💲{val:.0f} | Scor: <b>{current_score:.1f}</b>")
@@ -827,23 +843,30 @@ def bot_loop():
                         alert_sent = True
 
                     else:
-                        if action == "buy":
+                        if is_convert_event:
+                            # ALERTA SPECIALA CONVERT (inlocuieste buy/sell alert)
+                            if val >= 500: # Minim 500 actiuni mutate
+                                whale_tag = " 🐋 <b>WHALE!</b>" if val >= WHALE_ALERT else ""
+                                alert_extra = holding_warning_alert if is_holding_flag else ""
+                                tg(f"🔄 <b>{name} A DAT CONVERT/SPLIT!</b>{whale_tag}\n🏆 {title}\n⚖️ Acțiuni implicate: {val:,.0f}\n💡 <i>Și-a redistribuit capitalul în interiorul pieței.</i>{alert_extra}")
+                                alert_sent = True
+
+                        elif action == "buy":
                             global_state["positions"][pos_key] = global_state["positions"].get(pos_key, 0) + val
                             global_state["trader_entries"][pos_key] = price 
                             
-                            # VALOARE BRUTA CURENTA PE PARTEA CUMPARATA
                             current_holding_gross = global_state["positions"].get(pos_key, 0)
                             opp_holding_gross = global_state["positions"].get(opp_key, 0)
+                            net_current_holding = max(0, current_holding_gross - opp_holding_gross)
 
                             if val >= CURRENT_ALERT_LIMIT:
                                 whale_tag = " 🐋 <b>WHALE BUY!</b>" if val >= WHALE_ALERT else ""
                                 alert_extra = holding_warning_alert if is_holding_flag else ""
                                 
-                                # HEDGE ALERT: Modificat sa apara mereu (fie ca detii tu sau nu)
-                                if opp_holding_gross > 500:
-                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține și ${opp_holding_gross:.0f} pe {opp_outcome}!"
+                                if opp_holding_gross > 1000 and not is_holding_flag:
+                                    alert_extra += f"\n⚠️ <b>HEDGE / MERGE POTENTIAL:</b> Deține ${opp_holding_gross:.0f} pe {opp_outcome}!"
 
-                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total pe {outcome}: <b>${current_holding_gross:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
+                                tg(f"👤 <b>{name} {action_ro} {side_formatted}</b>{whale_tag}\n🏆 {title}\n💲 +${val:.0f} @ {price*100:.1f}¢\n💼 Total Acum: <b>${net_current_holding:,.0f}</b>\n🎯 Scor: <b>{current_score:.1f}/10</b>{alert_extra}")
                                 alert_sent = True
 
                         elif action == "sell":
@@ -890,7 +913,7 @@ def bot_loop():
                                 tg(f"{pp_warn}\n📉 <b>{name} {action_ro} {side_formatted}</b>\n🏆 {title}\nSuma: ${val:.0f}\n{exit_str}{alert_extra}")
                                 alert_sent = True
 
-                    # === CLUSTER LOGIC FIXED ===
+                    # === CLUSTER LOGIC ===
                     if c_valid_count >= 2:
                         if market_key not in global_state["cluster_created_at"]:
                             if c_total >= MINI_CLUSTER_ALERT:
@@ -927,6 +950,7 @@ def bot_loop():
                         if val >= WHALE_ALERT: note += " | 🐋 Whale"
                         if is_holding_flag: note += " | ⚠️ YOUR HOLDING"
                         if is_merge_event: note += " | ⚠️ MERGE"
+                        if is_convert_event: note += " | 🔄 CONVERT"
                         
                         global_state["trade_log"].append({
                             "time": datetime.now(RO).strftime("%H:%M"),
